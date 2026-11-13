@@ -100,18 +100,22 @@ object Ukho {
 }
 
 /**
- * WorldTides API v3 (paid, credit-based; what the old Lilliput widget used).
- * Continuous heights every 30 min above chart datum at Poole Town Quay.
- * https://www.worldtides.info/apidocs
+ * WorldTides API v3 (paid, credit-based). Continuous heights every 10 min above chart
+ * datum at Poole Town Quay. With lat/lon alone WorldTides uses its global model, which
+ * smooths away Poole's double high water; stationDistance asks it to use a tide station
+ * within that many km instead. https://www.worldtides.info/apidocs
  */
 object WorldTides {
-    fun heights(key: String, startEpoch: Long, days: Int = 7): List<TidePoint> {
+    class Result(val heights: List<TidePoint>, val station: String?)
+
+    fun heights(key: String, startEpoch: Long, days: Int = 7): Result {
         val url = "https://www.worldtides.info/api/v3?heights&start=$startEpoch&length=${days * 86400}" +
-            "&step=1800&lat=50.7139&lon=-1.9876&datum=CD&key=" + java.net.URLEncoder.encode(key, "UTF-8")
+            "&step=600&lat=50.7139&lon=-1.9876&stationDistance=15&datum=CD&key=" + java.net.URLEncoder.encode(key, "UTF-8")
         val o = JSONObject(get(url))
         if (o.optInt("status", 200) != 200) error(o.optString("error", "WorldTides error"))
         val h = o.getJSONArray("heights")
-        return (0 until h.length()).map { val x = h.getJSONObject(it); TidePoint(x.getLong("dt"), x.getDouble("height")) }
+        val pts = (0 until h.length()).map { val x = h.getJSONObject(it); TidePoint(x.getLong("dt"), x.getDouble("height")) }
+        return Result(pts, o.optString("station").takeIf { it.isNotBlank() })
     }
 }
 
