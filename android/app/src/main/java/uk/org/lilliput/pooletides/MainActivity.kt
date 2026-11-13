@@ -61,6 +61,7 @@ data class UiState(
     val ukhoEvents: List<TidePoint> = emptyList(),
     val ukhoStation: String? = null,
     val thirdLabel: String = "UKHO",
+    val nowWeather: Weather? = null,
     val messages: List<String> = emptyList(),
     val dayOffset: Int = 0,
 )
@@ -154,6 +155,7 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
             ukho = wtCurve ?: events?.let { Curves.shapedFromEvents(it, astro::heightAt) } ?: emptyList(),
             ukhoStation = prefs.getString("ukho_station_name", null),
             thirdLabel = if (wtCurve != null) "WorldTides" else "UKHO",
+            nowWeather = wx[now - now % 3600],
             messages = msgs,
         )
     }
@@ -197,6 +199,7 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
                 TextButton(onClick = { vm.shiftDay(1) }, enabled = s.dayOffset < 6) { Text("▶") }
                 OutlinedButton(onClick = { showTable = true }) { Text("HW / LW") }
             }
+            s.nowWeather?.let { NowWeather(it) }
             if (s.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             // The chart takes all the height left after the legend and notes
             TideChart(s, from, to, Modifier.fillMaxWidth().weight(1f))
@@ -220,6 +223,24 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
         if (uk != vm.ukhoKey) vm.ukhoKey = uk
         if (wt != vm.worldTidesKey) vm.worldTidesKey = wt
         showSettings = false
+    }
+}
+
+private val COMPASS = listOf("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")
+
+/** Current Bournemouth wind and pressure, the inputs to the surge correction. */
+@Composable
+fun NowWeather(w: Weather) {
+    val kn = w.windMs * 1.943844
+    val dir = COMPASS[(((w.windFromDeg % 360) + 360) % 360 / 22.5 + 0.5).toInt() % 16]
+    Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Wind ", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("%s %.0f kn".format(dir, kn), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.width(20.dp))
+        Text("Pressure ", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("%.0f hPa".format(w.mslpHpa), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.weight(1f))
+        Text("Bournemouth, now", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
