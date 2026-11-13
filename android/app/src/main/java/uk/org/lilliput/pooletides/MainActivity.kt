@@ -269,6 +269,8 @@ private data class Label(val text: String, val x: Float, val y: Float, val high:
 @Composable
 fun TideChart(s: UiState, from: Long, to: Long, modifier: Modifier) {
     val modelTp = remember(s.model, from) { Curves.turningPoints(s.model, from, to) }
+    // gauge readings are noisy: find highs/lows on a 75-minute running mean
+    val obsTp = remember(s.observed, from) { Curves.turningPoints(Curves.smooth(s.observed, 2), from, to) }
     val thirdTp = remember(s.ukho, s.ukhoEvents, from) { thirdTurningPoints(s, from, to) }
     val grid = MaterialTheme.colorScheme.outlineVariant
     val text = MaterialTheme.colorScheme.onSurfaceVariant
@@ -276,7 +278,7 @@ fun TideChart(s: UiState, from: Long, to: Long, modifier: Modifier) {
     val labelBg = MaterialTheme.colorScheme.background.copy(alpha = 0.8f)
     Canvas(modifier) {
         // room above and below the plot for HW/LW labels (two rows each)
-        val left = 36.dp.toPx(); val bottom = size.height - 18.dp.toPx() - 40.dp.toPx(); val top = 56.dp.toPx()
+        val left = 36.dp.toPx(); val bottom = size.height - 18.dp.toPx() - 30.dp.toPx(); val top = 44.dp.toPx()
         val w = size.width - left
         val all = listOf(s.observed, s.model, s.ukho).flatten().filter { it.t in from..to }
         // Axis starts at 0.5 m; it only extends lower if a reading actually goes below that
@@ -319,8 +321,11 @@ fun TideChart(s: UiState, from: Long, to: Long, modifier: Modifier) {
         val now = Instant.now().epochSecond
         if (now in from..to) drawLine(nowLine, Offset(x(now), top), Offset(x(now), bottom), 2f,
             pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
-        drawTurningLabels(modelTp.map { it to MODEL_COLOR } + thirdTp.map { it to UKHO_COLOR }, ::x, ::y,
-            left, size.width, 2f, size.height - 2f, reserved, labelBg)
+        drawTurningLabels(obsTp.map { it to OBS_COLOR } + modelTp.map { it to MODEL_COLOR } + thirdTp.map { it to UKHO_COLOR }, ::x, ::y,
+            left, size.width, 2f, size.height - 2f, reserved, labelBg,
+            curves = listOf(s.observed, s.model, s.ukho).map { c ->
+                c.filter { it.t in from..to }.map { Offset(x(it.t), y(it.h)) }
+            })
     }
 }
 
@@ -336,7 +341,9 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTurningLabels(
     pts: List<Pair<Pair<TidePoint, Boolean>, Color>>, x: (Long) -> Float, y: (Double) -> Float,
     minX: Float, maxX: Float, minY: Float, maxY: Float,
     reserved: List<android.graphics.RectF>, bg: Color,
+    curves: List<List<Offset>> = emptyList(),
 ) {
+    fun hidesCurve(r: android.graphics.RectF) = curves.any { c -> c.any { r.contains(it.x, it.y) } }
     val paint = android.graphics.Paint().apply { textSize = 11.sp.toPx(); isAntiAlias = true; isFakeBoldText = true }
     val lineH = paint.fontSpacing
     val gap = 6.dp.toPx()
@@ -355,13 +362,17 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTurningLabels(
         val blockH = lineH * 2
         val l = (px - w / 2).coerceIn(minX, maxX - w)
         // candidate block tops: above the point stacking upwards, or below stacking downwards
-        val above = (0..2).map { k -> py - gap - blockH - k * blockH }
-        val below = (0..2).map { k -> py + gap + k * blockH }
+        // half-label steps so a label can slip just past a nearby curve
+        val above = (0..6).map { k -> py - gap - blockH - k * blockH / 2 }
+        val below = (0..6).map { k -> py + gap + k * blockH / 2 }
         val slots = if (high) above + below else below + above
-        val blockTop = slots.firstOrNull { t ->
+        fun free(t: Float): android.graphics.RectF? {
             val r = android.graphics.RectF(l - 2, t, l + w + 2, t + blockH)
-            r.top >= minY && r.bottom <= maxY && placed.none { android.graphics.RectF.intersects(it, r) }
-        } ?: continue
+            return r.takeIf { it.top >= minY && it.bottom <= maxY && placed.none { p -> android.graphics.RectF.intersects(p, it) } }
+        }
+        // prefer a slot that leaves every curve visible; otherwise the nearest free slot
+        val blockTop = slots.firstOrNull { t -> free(t)?.let { !hidesCurve(it) } == true }
+            ?: slots.firstOrNull { free(it) != null } ?: continue
         placed += android.graphics.RectF(l - 2, blockTop, l + w + 2, blockTop + blockH)
         paint.color = color.toArgb()
         val c = drawContext.canvas.nativeCanvas

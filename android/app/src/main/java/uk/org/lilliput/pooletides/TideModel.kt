@@ -82,6 +82,12 @@ class SurgeModel(json: String) {
 }
 
 object Curves {
+    /** Centred running mean over 2k+1 points, for noisy gauge readings. */
+    fun smooth(pts: List<TidePoint>, k: Int): List<TidePoint> = pts.indices.map { i ->
+        val win = pts.subList(maxOf(0, i - k), minOf(pts.size, i + k + 1))
+        TidePoint(pts[i].t, win.sumOf { it.h } / win.size)
+    }
+
     /** Poole Tides model = astronomical + surge where weather is available. */
     fun model(astro: AstroTable, surge: SurgeModel, wx: Map<Long, Weather>, from: Long, to: Long): List<TidePoint> {
         val out = ArrayList<TidePoint>()
