@@ -213,8 +213,8 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
         }
     }
     if (showTable) AlertDialog(onDismissRequest = { showTable = false },
-        title = { Text(dayStart.format(DateTimeFormatter.ofPattern("EEE d MMM"))) },
-        text = { HighLowTable(s, from, to) },
+        title = { Text("High and low waters – " + dayStart.format(DateTimeFormatter.ofPattern("EEE d MMM"))) },
+        text = { Column { HighLowTable(s, from, to) } },
         confirmButton = { TextButton(onClick = { showTable = false }) { Text("Close") } })
     if (showSettings) SettingsDialog(vm.ukhoKey, vm.worldTidesKey, onDismiss = { showSettings = false }) { uk, wt ->
         if (uk != vm.ukhoKey) vm.ukhoKey = uk
@@ -288,7 +288,6 @@ private inline fun androidx.compose.ui.graphics.drawscope.DrawScope.clipRectSafe
 @Composable
 fun HighLowTable(s: UiState, from: Long, to: Long) {
     val fmt = DateTimeFormatter.ofPattern("HH:mm").withZone(LONDON)
-    Text("High and low waters", fontWeight = FontWeight.SemiBold)
     val ukhoEv = s.ukhoEvents.filter { it.t in from..to }
     val model = Curves.turningPoints(s.model, from, to)
     Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
