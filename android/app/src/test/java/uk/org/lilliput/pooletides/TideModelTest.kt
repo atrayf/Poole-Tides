@@ -53,11 +53,11 @@ class TideModelTest {
         val tp = Curves.turningPoints(pts, day, day + 86400)
         val lows = tp.filter { !it.second }; val highs = tp.filter { it.second }
         assertEquals("two low waters", 2, lows.size)
-        assert(highs.size in 1..2)
+        assert(highs.size in 1..4)
         assert(lows.all { it.first.h < 1.5 }) { "low waters should be true lows: $lows" }
         assert(tp.none { it.first.t == day || it.first.t == day + 86400 }) { "no events at midnight: $tp" }
-        // alternate HW/LW
-        tp.zipWithNext().forEach { (a, b) -> assert(a.second != b.second) { "not alternating: $tp" } }
+        // never two lows in a row
+        tp.zipWithNext().forEach { (a, b) -> assert(a.second || b.second) { "two lows in a row: $tp" } }
     }
 
     @Test
@@ -65,5 +65,44 @@ class TideModelTest {
         assertEquals("abc123", cleanKey("  abc123\n"))
         assertEquals("abc123", cleanKey("abc123\nabc123"))
         assertEquals("", cleanKey("   "))
+    }
+
+    /** Synthetic Poole-like tide: M2 plus an M4 that splits the high water. */
+    private fun pooleLike(t: Long): Double {
+        val w = 2 * Math.PI / (12.42 * 3600)
+        return 1.6 + 0.5 * kotlin.math.cos(w * t) + 0.22 * kotlin.math.cos(2 * w * t - Math.PI)
+    }
+
+    @Test
+    fun doubleHighWaterListsBothPeaks() {
+        val pts = (0L..4 * 86400 step 600).map { TidePoint(it, pooleLike(it)) }
+        val tp = Curves.turningPoints(pts, 86400, 2 * 86400)
+        val highs = tp.filter { it.second }
+        val lows = tp.filter { !it.second }
+        assert(highs.size >= 3) { "expected double highs, got $tp" }
+        assert(lows.size in 1..2) { "the stand dip must not be a low: $tp" }
+    }
+
+    @Test
+    fun shapedCurvePassesThroughEventsAndKeepsDoubleHigh() {
+        val astro = { t: Long -> pooleLike(t) }
+        val ref = (0L..4 * 86400 step 600).map { TidePoint(it, pooleLike(it)) }
+        // fake "UKHO" events: model turning points shifted 10 min and lowered 5 cm, one HW per tide
+        val tps = Curves.turningPoints(ref, 86400, 3 * 86400)
+        val ev = mutableListOf<TidePoint>()
+        for ((p, high) in tps) {
+            if (high && ev.isNotEmpty() && ev.last().h > 1.8) continue
+            ev += TidePoint(p.t + 600, p.h - 0.05)
+        }
+        val c = Curves.shapedFromEvents(ev, astro)
+        for (e in ev) assertEquals(e.h, c.first { it.t == e.t }.h, 1e-6)
+        val shaped = Curves.turningPoints(c, ev.first().t + 3600, ev.last().t - 3600).count { it.second }
+        val cosine = Curves.turningPoints(Curves.fromEvents(ev), ev.first().t + 3600, ev.last().t - 3600).count { it.second }
+        assert(shaped > cosine) { "shaped curve should show more highs ($shaped) than cosine ($cosine)" }
+    }
+
+    @Test
+    fun keysAreRedacted() {
+        assertEquals("bad header •••", redact("bad header abcdef123456\nabcdef123456", "abcdef123456"))
     }
 }

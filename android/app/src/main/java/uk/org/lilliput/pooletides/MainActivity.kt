@@ -60,6 +60,7 @@ data class UiState(
     val ukho: List<TidePoint> = emptyList(),
     val ukhoEvents: List<TidePoint> = emptyList(),
     val ukhoStation: String? = null,
+    val thirdLabel: String = "UKHO",
     val messages: List<String> = emptyList(),
     val dayOffset: Int = 0,
 )
@@ -74,7 +75,42 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
         get() = cleanKey(prefs.getString("ukho_key", "") ?: "")
         set(v) { prefs.edit().putString("ukho_key", cleanKey(v)).remove("ukho_station").apply(); refresh() }
 
+    var worldTidesKey: String
+        get() = cleanKey(prefs.getString("wt_key", "") ?: "")
+        set(v) { prefs.edit().putString("wt_key", cleanKey(v)).remove("wt_cache").remove("wt_cache_at").apply(); refresh() }
+
     init { refresh() }
+
+    /** UKHO's free tier only returns events from today; keep earlier ones so the curve covers the whole day. */
+    private fun mergeUkhoCache(fresh: List<TidePoint>): List<TidePoint> {
+        val old = runCatching {
+            org.json.JSONArray(prefs.getString("ukho_cache", "[]")).let { a ->
+                (0 until a.length()).map { val o = a.getJSONObject(it); TidePoint(o.getLong("t"), o.getDouble("h")) }
+            }
+        }.getOrDefault(emptyList())
+        val cutoff = Instant.now().epochSecond - 4 * 86400
+        val firstFresh = fresh.minOfOrNull { it.t } ?: Long.MAX_VALUE
+        val merged = (old.filter { it.t < firstFresh - 1800 && it.t > cutoff } + fresh).sortedBy { it.t }
+        val a = org.json.JSONArray()
+        merged.forEach { a.put(org.json.JSONObject().put("t", it.t).put("h", it.h)) }
+        prefs.edit().putString("ukho_cache", a.toString()).apply()
+        return merged
+    }
+
+    /** WorldTides costs credits: reuse a fetch for 12 hours. */
+    private fun worldTides(key: String, from: Long): List<TidePoint> {
+        val at = prefs.getLong("wt_cache_at", 0)
+        val now = Instant.now().epochSecond
+        if (now - at < 12 * 3600) runCatching {
+            val a = org.json.JSONArray(prefs.getString("wt_cache", "[]"))
+            val pts = (0 until a.length()).map { val o = a.getJSONObject(it); TidePoint(o.getLong("t"), o.getDouble("h")) }
+            if (pts.isNotEmpty()) return pts
+        }
+        val pts = WorldTides.heights(key, from - from % 86400, days = 10)
+        val a = org.json.JSONArray(); pts.forEach { a.put(org.json.JSONObject().put("t", it.t).put("h", it.h)) }
+        prefs.edit().putString("wt_cache", a.toString()).putLong("wt_cache_at", now).apply()
+        return pts
+    }
 
     fun shiftDay(d: Int) { state = state.copy(dayOffset = (state.dayOffset + d).coerceIn(-2, 6)) }
 
@@ -93,23 +129,31 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
                         val id = prefs.getString("ukho_station", null) ?: Ukho.findPooleStation(key).let { (id, name) ->
                             prefs.edit().putString("ukho_station", id).putString("ukho_station_name", name).apply(); id
                         }
-                        Ukho.events(key, id)
+                        mergeUkhoCache(Ukho.events(key, id))
                     }
                 }
             }
-            Triple(obs.await(), wx.await(), uk.await())
+            val wt = async { runCatching { worldTidesKey.takeIf { it.isNotBlank() }?.let { worldTides(it, from) } } }
+            listOf(obs.await(), wx.await(), uk.await(), wt.await())
         }
-        val observed = r.first.getOrElse { msgs += "Poole Quay gauge: ${it.message}"; emptyList() }
-        val wx = r.second.getOrElse { msgs += "Weather (surge correction off): ${it.message}"; emptyMap() }
-        val events = r.third.getOrElse { msgs += "UKHO: ${it.message}"; null }
-        if (ukhoKey.isBlank()) msgs += "Add your free UKHO key in Settings to show the UKHO curve."
+        @Suppress("UNCHECKED_CAST") val rObs = r[0] as Result<List<TidePoint>>
+        @Suppress("UNCHECKED_CAST") val rWx = r[1] as Result<Map<Long, Weather>>
+        @Suppress("UNCHECKED_CAST") val rUk = r[2] as Result<List<TidePoint>?>
+        @Suppress("UNCHECKED_CAST") val rWt = r[3] as Result<List<TidePoint>?>
+        val keys = arrayOf(ukhoKey, worldTidesKey)
+        val observed = rObs.getOrElse { msgs += "Poole Quay gauge: ${redact(it.message, *keys)}"; emptyList() }
+        val wx = rWx.getOrElse { msgs += "Weather (surge correction off): ${redact(it.message, *keys)}"; emptyMap() }
+        val events = rUk.getOrElse { msgs += "UKHO: ${redact(it.message, *keys)}"; null }
+        val wtCurve = rWt.getOrElse { msgs += "WorldTides: ${redact(it.message, *keys)}"; null }
+        if (ukhoKey.isBlank() && wtCurve == null) msgs += "Add your free UKHO key in Settings to show the third curve."
         state = state.copy(
             loading = false,
             observed = observed,
             model = Curves.model(astro, surge, wx, from, to),
             ukhoEvents = events ?: emptyList(),
-            ukho = events?.let { Curves.fromEvents(it) } ?: emptyList(),
+            ukho = wtCurve ?: events?.let { Curves.shapedFromEvents(it, astro::heightAt) } ?: emptyList(),
             ukhoStation = prefs.getString("ukho_station_name", null),
+            thirdLabel = if (wtCurve != null) "WorldTides" else "UKHO",
             messages = msgs,
         )
     }
@@ -156,7 +200,8 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
             Spacer(Modifier.height(8.dp))
             Legend(OBS_COLOR, "Poole Quay observed (EA gauge)", false)
             Legend(MODEL_COLOR, "Poole Tides model (gauge harmonics + Bournemouth pressure/wind)", false)
-            Legend(UKHO_COLOR, "UKHO ${s.ukhoStation ?: ""} (Absolute Tides source)", true)
+            Legend(UKHO_COLOR, if (s.thirdLabel == "WorldTides") "WorldTides (old Lilliput app source)"
+                else "UKHO ${s.ukhoStation ?: ""} HW/LW (Absolute Tides source), shaped by our harmonics", true)
             Spacer(Modifier.height(12.dp))
             HighLowTable(s, from, to)
             s.messages.forEach { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
@@ -166,8 +211,10 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
             Spacer(Modifier.height(24.dp))
         }
     }
-    if (showSettings) SettingsDialog(vm.ukhoKey, onDismiss = { showSettings = false }) {
-        vm.ukhoKey = it; showSettings = false
+    if (showSettings) SettingsDialog(vm.ukhoKey, vm.worldTidesKey, onDismiss = { showSettings = false }) { uk, wt ->
+        if (uk != vm.ukhoKey) vm.ukhoKey = uk
+        if (wt != vm.worldTidesKey) vm.worldTidesKey = wt
+        showSettings = false
     }
 }
 
@@ -247,10 +294,13 @@ fun HighLowTable(s: UiState, from: Long, to: Long) {
             }
         }
         Column(Modifier.weight(1f)) {
-            Text("UKHO", color = UKHO_COLOR, fontSize = 13.sp)
-            if (ukhoEv.isEmpty()) Text("–", fontSize = 13.sp)
-            ukhoEv.forEachIndexed { i, p ->
-                val high = (ukhoEv.getOrNull(i + 1)?.let { p.h > it.h } ?: ukhoEv.getOrNull(i - 1)?.let { p.h > it.h }) ?: true
+            Text(s.thirdLabel, color = UKHO_COLOR, fontSize = 13.sp)
+            val third = if (s.thirdLabel == "WorldTides") Curves.turningPoints(s.ukho, from, to)
+                else ukhoEv.mapIndexed { i, p ->
+                    p to ((ukhoEv.getOrNull(i + 1)?.let { p.h > it.h } ?: ukhoEv.getOrNull(i - 1)?.let { p.h > it.h }) ?: true)
+                }
+            if (third.isEmpty()) Text("–", fontSize = 13.sp)
+            third.forEach { (p, high) ->
                 Text("${if (high) "HW" else "LW"} ${fmt.format(Instant.ofEpochSecond(p.t))}  %.2f m".format(p.h), fontSize = 13.sp)
             }
         }
@@ -259,18 +309,26 @@ fun HighLowTable(s: UiState, from: Long, to: Long) {
 }
 
 @Composable
-fun SettingsDialog(current: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
-    var key by remember { mutableStateOf(current) }
+fun SettingsDialog(ukho: String, worldTides: String, onDismiss: () -> Unit, onSave: (String, String) -> Unit) {
+    var uk by remember { mutableStateOf(ukho) }
+    var wt by remember { mutableStateOf(worldTides) }
+    val hidden = androidx.compose.ui.text.input.PasswordVisualTransformation()
     AlertDialog(onDismissRequest = onDismiss,
-        title = { Text("UKHO API key") },
+        title = { Text("Data keys") },
         text = {
             Column {
-                Text("Free key from the ADMIRALTY Developer Portal (UK Tidal API, Discovery tier). Stored only on this phone.",
+                Text("UKHO: free key from the ADMIRALTY Developer Portal (UK Tidal API, Discovery tier).", fontSize = 13.sp)
+                OutlinedTextField(uk, { uk = it }, singleLine = true, label = { Text("UKHO subscription key") },
+                    visualTransformation = hidden)
+                Spacer(Modifier.height(12.dp))
+                Text("Optional WorldTides key (paid credits, as in the old Lilliput app). When set, the third curve uses WorldTides heights instead of UKHO.",
                     fontSize = 13.sp)
+                OutlinedTextField(wt, { wt = it }, singleLine = true, label = { Text("WorldTides key") },
+                    visualTransformation = hidden)
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(key, { key = it }, singleLine = true, label = { Text("Subscription key") })
+                Text("Keys are stored only on this phone.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(key) }) { Text("Save") } },
+        confirmButton = { TextButton(onClick = { onSave(uk, wt) }) { Text("Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }

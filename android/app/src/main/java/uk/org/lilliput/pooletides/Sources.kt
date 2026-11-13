@@ -95,3 +95,26 @@ object Ukho {
         }
     }
 }
+
+/**
+ * WorldTides API v3 (paid, credit-based; what the old Lilliput widget used).
+ * Continuous heights every 30 min above chart datum at Poole Town Quay.
+ * https://www.worldtides.info/apidocs
+ */
+object WorldTides {
+    fun heights(key: String, startEpoch: Long, days: Int = 7): List<TidePoint> {
+        val url = "https://www.worldtides.info/api/v3?heights&start=$startEpoch&length=${days * 86400}" +
+            "&step=1800&lat=50.7139&lon=-1.9876&datum=CD&key=" + java.net.URLEncoder.encode(key, "UTF-8")
+        val o = JSONObject(get(url))
+        if (o.optInt("status", 200) != 200) error(o.optString("error", "WorldTides error"))
+        val h = o.getJSONArray("heights")
+        return (0 until h.length()).map { val x = h.getJSONObject(it); TidePoint(x.getLong("dt"), x.getDouble("height")) }
+    }
+}
+
+/** Removes any API key from an error message before it is shown on screen. */
+fun redact(msg: String?, vararg keys: String): String {
+    var m = msg ?: "request failed"
+    for (k in keys) if (k.length >= 6) m = m.replace(k, "•••")
+    return m.lines().first()
+}
