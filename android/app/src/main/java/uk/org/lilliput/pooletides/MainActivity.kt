@@ -71,8 +71,8 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
     var state by mutableStateOf(UiState()); private set
 
     var ukhoKey: String
-        get() = prefs.getString("ukho_key", "") ?: ""
-        set(v) { prefs.edit().putString("ukho_key", v.trim()).remove("ukho_station").apply(); refresh() }
+        get() = cleanKey(prefs.getString("ukho_key", "") ?: "")
+        set(v) { prefs.edit().putString("ukho_key", cleanKey(v)).remove("ukho_station").apply(); refresh() }
 
     init { refresh() }
 
@@ -114,6 +114,9 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 }
+
+/** A pasted key may carry line breaks or be pasted twice: keep only the first token. */
+fun cleanKey(raw: String): String = raw.trim().split(Regex("\\s+")).firstOrNull().orEmpty()
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
