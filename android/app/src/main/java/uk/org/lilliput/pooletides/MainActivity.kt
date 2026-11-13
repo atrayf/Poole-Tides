@@ -215,6 +215,11 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
     val dayStart = Instant.now().atZone(LONDON).toLocalDate().plusDays(s.dayOffset.toLong())
     val from = dayStart.atStartOfDay(LONDON).toEpochSecond()
     val to = from + 86400
+    // selected minute of the day for the slider; starts at the current time
+    var selMin by remember {
+        mutableStateOf(java.time.LocalTime.now(LONDON).let { it.hour * 60 + it.minute }.toFloat())
+    }
+    val selT = from + (selMin * 60).toLong()
 
     Scaffold(topBar = {
         TopAppBar(title = { Text("Poole Tides") }, actions = {
@@ -233,8 +238,10 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
             s.nowWeather?.let { NowWeather(it) }
             if (s.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             // The chart takes all the height left after the legend and notes
-            TideChart(s, from, to, Modifier.fillMaxWidth().weight(1f))
-            Spacer(Modifier.height(8.dp))
+            TideChart(s, from, to, selT, Modifier.fillMaxWidth().weight(1f))
+            SelectedReadout(s, selT)
+            Slider(value = selMin, onValueChange = { selMin = it }, valueRange = 0f..1430f, steps = 142,
+                modifier = Modifier.fillMaxWidth().height(32.dp))
             Legend(OBS_COLOR, "Poole Quay observed (EA gauge)", false)
             Legend(MODEL_COLOR, "Poole Tides model (gauge harmonics + Bournemouth pressure/wind)", false)
             Legend(UKHO_COLOR, if (s.thirdLabel == "WorldTides") "WorldTides ${s.wtStation ?: "(global model)"}"
@@ -276,6 +283,20 @@ fun NowWeather(w: Weather) {
     }
 }
 
+/** Time picked on the slider, and each curve's height then, in the curve colours. */
+@Composable
+fun SelectedReadout(s: UiState, t: Long) {
+    val fmt = DateTimeFormatter.ofPattern("HH:mm").withZone(LONDON)
+    Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(fmt.format(Instant.ofEpochSecond(t)), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        listOf(s.observed to OBS_COLOR, s.model to MODEL_COLOR, s.ukho to UKHO_COLOR).forEach { (pts, c) ->
+            Spacer(Modifier.width(16.dp))
+            val h = Curves.at(pts, t)
+            Text(if (h == null) "–" else "%.2f m".format(h), color = c, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
 @Composable
 fun Legend(c: Color, label: String, dashed: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
@@ -299,7 +320,7 @@ fun thirdTurningPoints(s: UiState, from: Long, to: Long): List<Pair<TidePoint, B
 private data class Label(val text: String, val x: Float, val y: Float, val high: Boolean, val color: Color)
 
 @Composable
-fun TideChart(s: UiState, from: Long, to: Long, modifier: Modifier) {
+fun TideChart(s: UiState, from: Long, to: Long, selT: Long, modifier: Modifier) {
     val modelTp = remember(s.model, from) { Curves.turningPoints(s.model, from, to) }
     // gauge readings are noisy: find highs/lows on a 75-minute running mean
     val obsTp = remember(s.observed, from) { Curves.turningPoints(Curves.smooth(s.observed, 2), from, to) }
@@ -308,6 +329,7 @@ fun TideChart(s: UiState, from: Long, to: Long, modifier: Modifier) {
     val text = MaterialTheme.colorScheme.onSurfaceVariant
     val nowLine = MaterialTheme.colorScheme.primary
     val labelBg = MaterialTheme.colorScheme.background.copy(alpha = 0.8f)
+    val selLine = MaterialTheme.colorScheme.onSurface
     Canvas(modifier) {
         // room above and below the plot for HW/LW labels (two rows each)
         val left = 36.dp.toPx(); val bottom = size.height - 18.dp.toPx() - 30.dp.toPx(); val top = 44.dp.toPx()
@@ -358,6 +380,14 @@ fun TideChart(s: UiState, from: Long, to: Long, modifier: Modifier) {
             curves = listOf(s.observed, s.model, s.ukho).map { c ->
                 c.filter { it.t in from..to }.map { Offset(x(it.t), y(it.h)) }
             })
+        // slider time: a vertical line with a dot where it crosses each curve
+        drawLine(selLine.copy(alpha = 0.7f), Offset(x(selT), top), Offset(x(selT), bottom), 1.5.dp.toPx())
+        listOf(s.observed to OBS_COLOR, s.model to MODEL_COLOR, s.ukho to UKHO_COLOR).forEach { (pts, c) ->
+            Curves.at(pts, selT)?.let { h ->
+                drawCircle(selLine, 5.dp.toPx(), Offset(x(selT), y(h)))
+                drawCircle(c, 3.5.dp.toPx(), Offset(x(selT), y(h)))
+            }
+        }
     }
 }
 

@@ -82,6 +82,21 @@ class SurgeModel(json: String) {
 }
 
 object Curves {
+    /**
+     * Height at time t, interpolated linearly between the readings either side.
+     * Null if t is outside the series or falls in a gap of more than [maxGap] seconds.
+     */
+    fun at(pts: List<TidePoint>, t: Long, maxGap: Long = 3600): Double? {
+        if (pts.isEmpty()) return null
+        var i = pts.binarySearch { it.t.compareTo(t) }
+        if (i >= 0) return pts[i].h
+        i = -i - 1
+        if (i == 0 || i == pts.size) return null
+        val a = pts[i - 1]; val b = pts[i]
+        if (b.t - a.t > maxGap) return null
+        return a.h + (b.h - a.h) * (t - a.t).toDouble() / (b.t - a.t)
+    }
+
     /** Centred running mean over 2k+1 points, for noisy gauge readings. */
     fun smooth(pts: List<TidePoint>, k: Int): List<TidePoint> = pts.indices.map { i ->
         val win = pts.subList(maxOf(0, i - k), minOf(pts.size, i + k + 1))
