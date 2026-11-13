@@ -10,12 +10,22 @@ Android app showing three tide curves for Poole Quay, in metres above Poole char
 
 | Input | Source | Period |
 |---|---|---|
-| Poole Quay water level | EA flood-monitoring daily archive (`environment.data.gov.uk/flood-monitoring/archive`), Open Government Licence | Rolling ~12 months (the archive keeps about a year) |
+| Poole Quay water level | EA export of gauge 44232 supplied by Andrew (`hist/`, Unchecked/Good rows only) | Nov 2009 – Mar 2025 |
+| Poole Quay water level | EA flood-monitoring daily archive (`environment.data.gov.uk/flood-monitoring/archive`), Open Government Licence | Oct 2025 – now (rolling ~12 months) |
 | Pressure (MSLP), wind speed/direction | NOAA GHCN-hourly station UKI0000EGHH (Bournemouth Airport, WMO 03862) | 1953 to now |
 
 **Parkstone Yacht Club wind:** I couldn't find a public archive of their station's readings, so the model uses Bournemouth Airport wind. If PYC (or Poole Harbour Commissioners) can export their logged history, it can replace or supplement the airport wind in `fit_model.py`.
 
-**Longer gauge history:** the EA gauge has run since November 2009. Only the last year is published as open daily archives. The full 15-minute history can be requested from the EA (enquiries@environment-agency.gov.uk, "tide gauge data, station 44232 Poole Harbour"). Poole isn't in the UK National Tide Gauge Network (BODC), so BODC has no Poole series. With a longer record, re-run `fit_model.py` unchanged. It separates more constituents (e.g. long-period and nodal effects) and gives a better-trained surge model.
+**Gauge QC:** rows flagged Suspect or Missing are dropped, along with readings outside −1.4 to +2.0 m AOD (instrument faults, e.g. −3.4 / +5.9 m in 2013–14) and spikes more than 0.3 m from a 2-hour rolling median. There is a gap from mid-March to late October 2025 between the two sources.
+
+**Accuracy (out of sample).** Harmonics and surge were fitted on 2009–2023 only and scored on Jan 2024 – Nov 2026 (19,063 hours):
+
+| | Hourly RMSE | Daily-max (HW height) RMSE |
+|---|---|---|
+| Harmonics only | 17.2 cm | 17.7 cm |
+| Harmonics + Bournemouth pressure/wind | **11.1 cm** | **11.6 cm** |
+
+The fitted pressure response is −0.97 cm/hPa, close to the theoretical inverse-barometer −1.0 cm/hPa. The gauge's mean level rises about 11 mm/year over the record, and that trend is included in the predictions. See `model/validation_out_of_sample.png`.
 
 ## Model (`model/fit_model.py`)
 
