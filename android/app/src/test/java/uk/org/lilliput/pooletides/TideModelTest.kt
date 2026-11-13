@@ -59,4 +59,11 @@ class TideModelTest {
         // alternate HW/LW
         tp.zipWithNext().forEach { (a, b) -> assert(a.second != b.second) { "not alternating: $tp" } }
     }
+
+    @Test
+    fun pastedKeyIsCleaned() {
+        assertEquals("abc123", cleanKey("  abc123\n"))
+        assertEquals("abc123", cleanKey("abc123\nabc123"))
+        assertEquals("", cleanKey("   "))
+    }
 }
