@@ -43,7 +43,7 @@ In the app, the surge term uses Open-Meteo's free hourly pressure and wind for B
 
 ## UKHO key
 
-Sign up free at the ADMIRALTY Developer Portal (admiraltyapi.portal.azure-api.net). Subscribe to "UK Tidal API – Discovery", then paste the primary key into the app's Settings. The key stays on the phone. The Discovery tier gives 7 days of high and low waters (no intermediate heights). The app picks the Poole station whose name contains "Quay", or else the first Poole station.
+Sign up free at the ADMIRALTY Developer Portal (admiraltyapi.portal.azure-api.net). Subscribe to "UK Tidal API – Discovery", then paste the primary key into the app's Settings. The key stays on the phone. The Discovery tier gives 7 days of high and low waters (no intermediate heights). The app uses UKHO station 0036A "POOLE HARBOUR" (at Poole Quay) rather than 0036 "Poole (Entrance)".
 
 ## Building
 
