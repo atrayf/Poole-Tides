@@ -332,10 +332,13 @@ fun TideChart(s: UiState, from: Long, to: Long, modifier: Modifier) {
 private val HHMM = DateTimeFormatter.ofPattern("HH:mm").withZone(LONDON)
 
 /**
- * Labels each high/low with its height (m) above its time, in its curve's colour. Highs go above
- * the point, lows below; each label takes the first slot (nearest first, then the
- * other side) that does not overlap a label already placed. A label with no free
- * slot is left off rather than drawn over another.
+ * Labels each high/low with its height (m) above its time, in its curve's colour.
+ * Highs or lows of the different curves that fall close together form a group, and a
+ * group's labels go side by side in one row, in time order, clear of every curve
+ * (above the highest curve for highs, below the lowest for lows). A label that can't
+ * join such a row takes the first free slot near its point, preferring one that
+ * leaves the curves visible. A label with no free slot is left off rather than drawn
+ * over another.
  */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTurningLabels(
     pts: List<Pair<Pair<TidePoint, Boolean>, Color>>, x: (Long) -> Float, y: (Double) -> Float,
@@ -347,39 +350,63 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTurningLabels(
     val paint = android.graphics.Paint().apply { textSize = 11.sp.toPx(); isAntiAlias = true; isFakeBoldText = true }
     val lineH = paint.fontSpacing
     val gap = 6.dp.toPx()
+    val sep = 4.dp.toPx()
+    val blockH = lineH * 2
     val placed = reserved.toMutableList()
     val bgPaint = android.graphics.Paint().apply { color = bg.toArgb(); isAntiAlias = true }
-    val dots = pts.map { (tp, color) -> Triple(x(tp.first.t), y(tp.first.h), color) }
-    dots.forEach { (px, py, color) -> drawCircle(color, 3.dp.toPx(), Offset(px, py)) }
-    // label higher curve points first so the main peaks get the nearest slots
-    for ((tp, color) in pts.sortedByDescending { kotlin.math.abs(it.first.first.h - 1.6) }) {
-        val (p, high) = tp
-        val px = x(p.t); val py = y(p.h)
-        // two lines: height (with unit) above, time below
-        val top1 = "%.2f m".format(p.h)
-        val top2 = HHMM.format(Instant.ofEpochSecond(p.t))
-        val w = maxOf(paint.measureText(top1), paint.measureText(top2))
-        val blockH = lineH * 2
-        val l = (px - w / 2).coerceIn(minX, maxX - w)
-        // candidate block tops: above the point stacking upwards, or below stacking downwards
+    pts.forEach { (tp, color) -> drawCircle(color, 3.dp.toPx(), Offset(x(tp.first.t), y(tp.first.h))) }
+
+    class Lbl(val p: TidePoint, val high: Boolean, val color: Color) {
+        val l1 = "%.2f m".format(p.h)
+        val l2 = HHMM.format(Instant.ofEpochSecond(p.t))
+        val w = maxOf(paint.measureText(l1), paint.measureText(l2))
+    }
+    fun draw(b: Lbl, l: Float, top: Float) {
+        placed += android.graphics.RectF(l - 2, top, l + b.w + 2, top + blockH)
+        paint.color = b.color.toArgb()
+        val c = drawContext.canvas.nativeCanvas
+        // dark backing so curves and grid lines pass behind the text
+        c.drawRoundRect(l - 3, top, l + b.w + 3, top + blockH, 4.dp.toPx(), 4.dp.toPx(), bgPaint)
+        c.drawText(b.l1, l + (b.w - paint.measureText(b.l1)) / 2, top + lineH * 0.8f, paint)
+        c.drawText(b.l2, l + (b.w - paint.measureText(b.l2)) / 2, top + lineH * 1.8f, paint)
+    }
+    fun fits(r: android.graphics.RectF) =
+        r.top >= minY && r.bottom <= maxY && placed.none { android.graphics.RectF.intersects(it, r) }
+
+    // group same-type turning points within 2 h of the group's first
+    val all = pts.map { (tp, color) -> Lbl(tp.first, tp.second, color) }.sortedBy { it.p.t }
+    val groups = mutableListOf<MutableList<Lbl>>()
+    for (b in all) {
+        val g = groups.lastOrNull { it.first().high == b.high && b.p.t - it.first().p.t <= 2 * 3600 }
+        if (g != null) g += b else groups += mutableListOf(b)
+    }
+    val single = mutableListOf<Lbl>()
+    for (g in groups) {
+        if (g.size < 2) { single += g; continue }
+        val total = g.sumOf { it.w.toDouble() }.toFloat() + sep * (g.size - 1)
+        val cx = g.map { x(it.p.t) }.average().toFloat()
+        val left = (cx - total / 2).coerceIn(minX, maxX - total)
+        val span = curves.flatten().filter { it.x in (left - 3)..(left + total + 3) }.map { it.y } +
+            g.map { y(it.p.h) }
+        val high = g.first().high
+        val top = if (high) span.min() - gap - blockH else span.max() + gap
+        val row = android.graphics.RectF(left - 3, top, left + total + 3, top + blockH)
+        if (!fits(row)) { single += g; continue }
+        var l = left
+        for (b in g) { draw(b, l, top); l += b.w + sep }
+    }
+    // the rest: nearest free slot, label the extreme points first so main peaks get the best slots
+    for (b in single.sortedByDescending { kotlin.math.abs(it.p.h - 1.6) }) {
+        val px = x(b.p.t); val py = y(b.p.h)
+        val l = (px - b.w / 2).coerceIn(minX, maxX - b.w)
         // half-label steps so a label can slip just past a nearby curve
         val above = (0..6).map { k -> py - gap - blockH - k * blockH / 2 }
         val below = (0..6).map { k -> py + gap + k * blockH / 2 }
-        val slots = if (high) above + below else below + above
-        fun free(t: Float): android.graphics.RectF? {
-            val r = android.graphics.RectF(l - 2, t, l + w + 2, t + blockH)
-            return r.takeIf { it.top >= minY && it.bottom <= maxY && placed.none { p -> android.graphics.RectF.intersects(p, it) } }
-        }
-        // prefer a slot that leaves every curve visible; otherwise the nearest free slot
-        val blockTop = slots.firstOrNull { t -> free(t)?.let { !hidesCurve(it) } == true }
-            ?: slots.firstOrNull { free(it) != null } ?: continue
-        placed += android.graphics.RectF(l - 2, blockTop, l + w + 2, blockTop + blockH)
-        paint.color = color.toArgb()
-        val c = drawContext.canvas.nativeCanvas
-        // dark backing so curves and grid lines pass behind the text
-        c.drawRoundRect(l - 3, blockTop, l + w + 3, blockTop + blockH, 4.dp.toPx(), 4.dp.toPx(), bgPaint)
-        c.drawText(top1, l + (w - paint.measureText(top1)) / 2, blockTop + lineH * 0.8f, paint)
-        c.drawText(top2, l + (w - paint.measureText(top2)) / 2, blockTop + lineH * 1.8f, paint)
+        val slots = if (b.high) above + below else below + above
+        fun rect(t: Float) = android.graphics.RectF(l - 2, t, l + b.w + 2, t + blockH)
+        val top = slots.firstOrNull { fits(rect(it)) && !hidesCurve(rect(it)) }
+            ?: slots.firstOrNull { fits(rect(it)) } ?: continue
+        draw(b, l, top)
     }
 }
 
