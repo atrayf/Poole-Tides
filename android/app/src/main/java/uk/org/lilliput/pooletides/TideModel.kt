@@ -144,11 +144,71 @@ object Curves {
         val out = ArrayList<Pair<TidePoint, Boolean>>()
         for (k in lows.indices) {
             if (k > 0) {
-                val hw = p.subList(lows[k - 1], lows[k] + 1).maxBy { it.h }
-                if (hw.t in from..to) out += hw to true
+                for (hw in highsBetween(p.subList(lows[k - 1], lows[k] + 1))) {
+                    if (hw.t in from..to) out += hw to true
+                }
             }
             if (p[lows[k]].t in from..to) out += p[lows[k]] to false
         }
         return out.sortedBy { it.first.t }
+    }
+
+    /**
+     * The high water(s) between two low waters. Poole often has a double high:
+     * two peaks at least 2 h apart with a dip of 3 cm or more between them.
+     * Then both are returned; otherwise just the highest point.
+     */
+    private fun highsBetween(seg: List<TidePoint>): List<TidePoint> {
+        val top = seg.maxBy { it.h }
+        val peaks = seg.indices.filter { i ->
+            i > 0 && i < seg.size - 1 &&
+                seg.filter { kotlin.math.abs(it.t - seg[i].t) <= 3600 }.all { it.h <= seg[i].h } &&
+                seg[i - 1].h < seg[i].h
+        }.map { seg[it] }
+        val second = peaks.filter { kotlin.math.abs(it.t - top.t) >= 7200 }.maxByOrNull { it.h }
+            ?: return listOf(top)
+        val (a, b) = if (second.t < top.t) second to top else top to second
+        val dip = seg.filter { it.t in a.t..b.t }.minOf { it.h }
+        return if (minOf(a.h, b.h) - dip >= 0.03) listOf(a, b) else listOf(top)
+    }
+
+    /**
+     * Draws a source's HW/LW events with the shape of our own harmonic curve between
+     * them, so Poole's double high water and young-flood stand show. Each event is
+     * matched to the nearest model turning point of the same kind (within 3 h), then
+     * the model curve between matched points is stretched in time and scaled in
+     * height to pass exactly through the source's events. Falls back to a cosine
+     * join where no match is found.
+     */
+    fun shapedFromEvents(events: List<TidePoint>, astro: (Long) -> Double?, step: Long = 600): List<TidePoint> {
+        val e = events.sortedBy { it.t }
+        if (e.size < 2) return e
+        val span = (e.first().t - 86400)..(e.last().t + 86400)
+        val ref = span.step(step).mapNotNull { t -> astro(t)?.let { TidePoint(t, it) } }
+        val tps = turningPoints(ref, span.first, span.last)
+        fun isHigh(i: Int) = (e.getOrNull(i + 1)?.let { e[i].h > it.h } ?: e.getOrNull(i - 1)?.let { e[i].h > it.h }) ?: true
+        val match = e.indices.map { i ->
+            val high = isHigh(i)
+            tps.filter { it.second == high && kotlin.math.abs(it.first.t - e[i].t) <= 3 * 3600 }
+                .minByOrNull { kotlin.math.abs(it.first.t - e[i].t) }?.first
+        }
+        val out = ArrayList<TidePoint>()
+        for (i in 0 until e.size - 1) {
+            val a = e[i]; val b = e[i + 1]; val ma = match[i]; val mb = match[i + 1]
+            val shaped = ma != null && mb != null && mb.t > ma.t && kotlin.math.abs(mb.h - ma.h) > 0.05
+            var t = a.t
+            while (t < b.t) {
+                val f = (t - a.t).toDouble() / (b.t - a.t)
+                val h = if (shaped) {
+                    val tm = ma!!.t + (f * (mb!!.t - ma.t)).toLong()
+                    val am = astro(tm)
+                    if (am == null) null else a.h + (am - ma.h) / (mb.h - ma.h) * (b.h - a.h)
+                } else null
+                out += TidePoint(t, h ?: (a.h + (b.h - a.h) * (1 - cos(Math.PI * f)) / 2))
+                t += step
+            }
+        }
+        out += e.last()
+        return out
     }
 }
