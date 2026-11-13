@@ -178,6 +178,7 @@ class MainActivity : ComponentActivity() {
 fun TidesScreen(vm: TidesViewModel = viewModel()) {
     val s = vm.state
     var showSettings by remember { mutableStateOf(false) }
+    var showTable by remember { mutableStateOf(false) }
     val dayStart = Instant.now().atZone(LONDON).toLocalDate().plusDays(s.dayOffset.toLong())
     val from = dayStart.atStartOfDay(LONDON).toEpochSecond()
     val to = from + 86400
@@ -188,29 +189,33 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
             TextButton(onClick = { showSettings = true }) { Text("Settings") }
         })
     }) { pad ->
-        Column(Modifier.padding(pad).padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
+        Column(Modifier.padding(pad).padding(horizontal = 16.dp).fillMaxSize()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = { vm.shiftDay(-1) }, enabled = s.dayOffset > -2) { Text("◀") }
                 Text(dayStart.format(DateTimeFormatter.ofPattern("EEE d MMM yyyy")),
                     Modifier.weight(1f), fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
                 TextButton(onClick = { vm.shiftDay(1) }, enabled = s.dayOffset < 6) { Text("▶") }
+                OutlinedButton(onClick = { showTable = true }) { Text("HW / LW") }
             }
             if (s.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            TideChart(s, from, to, Modifier.fillMaxWidth().height(320.dp))
+            // The chart takes all the height left after the legend and notes
+            TideChart(s, from, to, Modifier.fillMaxWidth().weight(1f))
             Spacer(Modifier.height(8.dp))
             Legend(OBS_COLOR, "Poole Quay observed (EA gauge)", false)
             Legend(MODEL_COLOR, "Poole Tides model (gauge harmonics + Bournemouth pressure/wind)", false)
             Legend(UKHO_COLOR, if (s.thirdLabel == "WorldTides") "WorldTides (old Lilliput app source)"
                 else "UKHO ${s.ukhoStation ?: ""} HW/LW (Absolute Tides source), shaped by our harmonics", true)
-            Spacer(Modifier.height(12.dp))
-            HighLowTable(s, from, to)
             s.messages.forEach { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
             Spacer(Modifier.height(8.dp))
             Text("Heights in metres above Poole chart datum (1.40 m below ODN). Times are UK local.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(8.dp))
         }
     }
+    if (showTable) AlertDialog(onDismissRequest = { showTable = false },
+        title = { Text(dayStart.format(DateTimeFormatter.ofPattern("EEE d MMM"))) },
+        text = { HighLowTable(s, from, to) },
+        confirmButton = { TextButton(onClick = { showTable = false }) { Text("Close") } })
     if (showSettings) SettingsDialog(vm.ukhoKey, vm.worldTidesKey, onDismiss = { showSettings = false }) { uk, wt ->
         if (uk != vm.ukhoKey) vm.ukhoKey = uk
         if (wt != vm.worldTidesKey) vm.worldTidesKey = wt
