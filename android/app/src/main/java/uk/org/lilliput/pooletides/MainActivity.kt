@@ -273,9 +273,10 @@ fun TideChart(s: UiState, from: Long, to: Long, modifier: Modifier) {
     val grid = MaterialTheme.colorScheme.outlineVariant
     val text = MaterialTheme.colorScheme.onSurfaceVariant
     val nowLine = MaterialTheme.colorScheme.primary
+    val labelBg = MaterialTheme.colorScheme.background.copy(alpha = 0.8f)
     Canvas(modifier) {
         // room above and below the plot for HW/LW labels (two rows each)
-        val left = 36.dp.toPx(); val bottom = size.height - 22.dp.toPx() - 30.dp.toPx(); val top = 34.dp.toPx()
+        val left = 36.dp.toPx(); val bottom = size.height - 18.dp.toPx() - 40.dp.toPx(); val top = 56.dp.toPx()
         val w = size.width - left
         val all = listOf(s.observed, s.model, s.ukho).flatten().filter { it.t in from..to }
         // Axis starts at 0.5 m; it only extends lower if a reading actually goes below that
@@ -290,10 +291,15 @@ fun TideChart(s: UiState, from: Long, to: Long, modifier: Modifier) {
             drawContext.canvas.nativeCanvas.drawText("%.1f".format(gh), 0f, y(gh) + 4, paint)
             gh += 0.5
         }
+        val hourBase = bottom + 14.dp.toPx()
+        val reserved = mutableListOf<android.graphics.RectF>()
         for (hr in 0..24 step 3) {
             val t = from + hr * 3600L
             drawLine(grid, Offset(x(t), top), Offset(x(t), bottom), 1f)
-            if (hr < 24) drawContext.canvas.nativeCanvas.drawText("%02d".format(hr), x(t) + 2, size.height - 4, paint)
+            if (hr < 24) {
+                drawContext.canvas.nativeCanvas.drawText("%02d".format(hr), x(t) + 2, hourBase, paint)
+                reserved += android.graphics.RectF(x(t), hourBase - paint.textSize, x(t) + paint.measureText("00") + 4, hourBase + 2)
+            }
         }
         fun series(pts: List<TidePoint>, c: Color, dashed: Boolean) {
             val p = Path(); var started = false; var last = 0L
@@ -310,18 +316,18 @@ fun TideChart(s: UiState, from: Long, to: Long, modifier: Modifier) {
             series(s.model, MODEL_COLOR, false)
             series(s.observed, OBS_COLOR, false)
         }
-        drawTurningLabels(modelTp.map { it to MODEL_COLOR } + thirdTp.map { it to UKHO_COLOR }, ::x, ::y,
-            left, size.width, 2f, size.height - 18.dp.toPx())
         val now = Instant.now().epochSecond
         if (now in from..to) drawLine(nowLine, Offset(x(now), top), Offset(x(now), bottom), 2f,
             pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
+        drawTurningLabels(modelTp.map { it to MODEL_COLOR } + thirdTp.map { it to UKHO_COLOR }, ::x, ::y,
+            left, size.width, 2f, size.height - 2f, reserved, labelBg)
     }
 }
 
 private val HHMM = DateTimeFormatter.ofPattern("HH:mm").withZone(LONDON)
 
 /**
- * Labels each high/low with "time height" in its curve's colour. Highs go above
+ * Labels each high/low with its height (m) above its time, in its curve's colour. Highs go above
  * the point, lows below; each label takes the first slot (nearest first, then the
  * other side) that does not overlap a label already placed. A label with no free
  * slot is left off rather than drawn over another.
@@ -329,29 +335,40 @@ private val HHMM = DateTimeFormatter.ofPattern("HH:mm").withZone(LONDON)
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTurningLabels(
     pts: List<Pair<Pair<TidePoint, Boolean>, Color>>, x: (Long) -> Float, y: (Double) -> Float,
     minX: Float, maxX: Float, minY: Float, maxY: Float,
+    reserved: List<android.graphics.RectF>, bg: Color,
 ) {
     val paint = android.graphics.Paint().apply { textSize = 11.sp.toPx(); isAntiAlias = true; isFakeBoldText = true }
     val lineH = paint.fontSpacing
     val gap = 6.dp.toPx()
-    val placed = mutableListOf<android.graphics.RectF>()
+    val placed = reserved.toMutableList()
+    val bgPaint = android.graphics.Paint().apply { color = bg.toArgb(); isAntiAlias = true }
+    val dots = pts.map { (tp, color) -> Triple(x(tp.first.t), y(tp.first.h), color) }
+    dots.forEach { (px, py, color) -> drawCircle(color, 3.dp.toPx(), Offset(px, py)) }
     // label higher curve points first so the main peaks get the nearest slots
     for ((tp, color) in pts.sortedByDescending { kotlin.math.abs(it.first.first.h - 1.6) }) {
         val (p, high) = tp
         val px = x(p.t); val py = y(p.h)
-        drawCircle(color, 3.dp.toPx(), Offset(px, py))
-        val text = "${HHMM.format(Instant.ofEpochSecond(p.t))} %.2f".format(p.h)
-        val w = paint.measureText(text)
+        // two lines: height (with unit) above, time below
+        val top1 = "%.2f m".format(p.h)
+        val top2 = HHMM.format(Instant.ofEpochSecond(p.t))
+        val w = maxOf(paint.measureText(top1), paint.measureText(top2))
+        val blockH = lineH * 2
         val l = (px - w / 2).coerceIn(minX, maxX - w)
-        val above = (0..2).map { k -> py - gap - k * lineH }        // baseline candidates above
-        val below = (0..2).map { k -> py + gap + lineH * 0.8f + k * lineH }
+        // candidate block tops: above the point stacking upwards, or below stacking downwards
+        val above = (0..2).map { k -> py - gap - blockH - k * blockH }
+        val below = (0..2).map { k -> py + gap + k * blockH }
         val slots = if (high) above + below else below + above
-        val baseline = slots.firstOrNull { b ->
-            val r = android.graphics.RectF(l - 2, b - lineH * 0.8f, l + w + 2, b + lineH * 0.2f)
+        val blockTop = slots.firstOrNull { t ->
+            val r = android.graphics.RectF(l - 2, t, l + w + 2, t + blockH)
             r.top >= minY && r.bottom <= maxY && placed.none { android.graphics.RectF.intersects(it, r) }
         } ?: continue
-        placed += android.graphics.RectF(l - 2, baseline - lineH * 0.8f, l + w + 2, baseline + lineH * 0.2f)
+        placed += android.graphics.RectF(l - 2, blockTop, l + w + 2, blockTop + blockH)
         paint.color = color.toArgb()
-        drawContext.canvas.nativeCanvas.drawText(text, l, baseline, paint)
+        val c = drawContext.canvas.nativeCanvas
+        // dark backing so curves and grid lines pass behind the text
+        c.drawRoundRect(l - 3, blockTop, l + w + 3, blockTop + blockH, 4.dp.toPx(), 4.dp.toPx(), bgPaint)
+        c.drawText(top1, l + (w - paint.measureText(top1)) / 2, blockTop + lineH * 0.8f, paint)
+        c.drawText(top2, l + (w - paint.measureText(top2)) / 2, blockTop + lineH * 1.8f, paint)
     }
 }
 
