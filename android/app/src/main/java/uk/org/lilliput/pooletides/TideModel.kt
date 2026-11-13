@@ -119,4 +119,36 @@ object Curves {
         e.lastOrNull()?.let { out += it }
         return out
     }
+    /**
+     * High and low waters within [from, to]. Poole has a long double high-water stand,
+     * so the dip between the two highs is not a low water: a low water is a local
+     * minimum (over +/-90 min) below the 25-hour mean level, and the high water is
+     * the highest point between consecutive low waters. Uses data up to 12 h either
+     * side of the window so nothing is invented at midnight.
+     */
+    fun turningPoints(pts: List<TidePoint>, from: Long, to: Long): List<Pair<TidePoint, Boolean>> {
+        val p = pts.filter { it.t in from - 43200..to + 43200 }.sortedBy { it.t }
+        if (p.size < 3) return emptyList()
+        val half = 45000L // ~12.5 h each side for the running mean
+        val lows = ArrayList<Int>()
+        for (i in p.indices) {
+            val c = p[i]
+            val near = p.filter { kotlin.math.abs(it.t - c.t) <= 5400 }
+            if (near.first().t > c.t - 5400 || near.last().t < c.t + 5400) continue // need full window
+            if (near.any { it.h < c.h }) continue
+            val mean = p.filter { kotlin.math.abs(it.t - c.t) <= half }.map { it.h }.average()
+            if (c.h >= mean) continue
+            if (lows.isNotEmpty() && c.t - p[lows.last()].t < 3 * 3600) continue // flat bottom duplicate
+            lows += i
+        }
+        val out = ArrayList<Pair<TidePoint, Boolean>>()
+        for (k in lows.indices) {
+            if (k > 0) {
+                val hw = p.subList(lows[k - 1], lows[k] + 1).maxBy { it.h }
+                if (hw.t in from..to) out += hw to true
+            }
+            if (p[lows[k]].t in from..to) out += p[lows[k]] to false
+        }
+        return out.sortedBy { it.first.t }
+    }
 }

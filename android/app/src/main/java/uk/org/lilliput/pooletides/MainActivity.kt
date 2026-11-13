@@ -217,26 +217,12 @@ private inline fun androidx.compose.ui.graphics.drawscope.DrawScope.clipRectSafe
     l: Float, r: Float, t: Float, b: Float, block: () -> Unit,
 ) = drawContext.canvas.run { save(); clipRect(l, t, r, b); block(); restore() }
 
-/** Local highs and lows of a curve within [from, to]. */
-fun turningPoints(pts: List<TidePoint>, from: Long, to: Long): List<Pair<TidePoint, Boolean>> {
-    val p = pts.filter { it.t in from - 7200..to + 7200 }
-    val out = mutableListOf<Pair<TidePoint, Boolean>>()
-    for (i in 6 until p.size - 6) {
-        val win = p.subList(i - 6, i + 7)
-        val c = p[i]
-        if (c.t !in from..to) continue
-        if (win.all { it.h <= c.h } && out.lastOrNull()?.let { c.t - it.first.t < 3 * 3600 && it.second } != true) out += c to true
-        if (win.all { it.h >= c.h } && out.lastOrNull()?.let { c.t - it.first.t < 3 * 3600 && !it.second } != true) out += c to false
-    }
-    return out
-}
-
 @Composable
 fun HighLowTable(s: UiState, from: Long, to: Long) {
     val fmt = DateTimeFormatter.ofPattern("HH:mm").withZone(LONDON)
     Text("High and low waters", fontWeight = FontWeight.SemiBold)
     val ukhoEv = s.ukhoEvents.filter { it.t in from..to }
-    val model = turningPoints(s.model, from, to)
+    val model = Curves.turningPoints(s.model, from, to)
     Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
         Column(Modifier.weight(1f)) {
             Text("Poole Tides model", color = MODEL_COLOR, fontSize = 13.sp)
