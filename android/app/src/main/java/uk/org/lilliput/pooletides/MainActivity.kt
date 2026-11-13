@@ -210,7 +210,7 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
                 else "UKHO ${s.ukhoStation ?: ""} HW/LW, shaped by our harmonics", true)
             s.messages.forEach { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
             Spacer(Modifier.height(8.dp))
-            Text("Heights in metres above Poole chart datum (1.40 m below ODN). Times are UK local.",
+            Text("Heights in metres above Poole chart datum (gauge AOD + 1.32 m). Times are UK local.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
         }

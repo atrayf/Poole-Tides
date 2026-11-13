@@ -8,8 +8,12 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 
-/** Poole Quay chart datum is 1.40 m below Ordnance Datum Newlyn. */
-const val CD_BELOW_ODN = 1.40
+/**
+ * Added to the EA gauge's m AOD readings to give metres above Poole chart datum.
+ * 1.32 m is the offset the Lilliput app calibrated against WorldTides (April 2026);
+ * it matches UKHO low waters better than the nominal 1.40 m.
+ */
+const val CD_BELOW_ODN = 1.32
 
 private fun get(url: String, headers: Map<String, String> = emptyMap()): String {
     val c = URL(url).openConnection() as HttpURLConnection

@@ -1,8 +1,8 @@
 # Poole Tides
 
-Android app showing three tide curves for Poole Quay, in metres above Poole chart datum (1.40 m below ODN), UK local time:
+Android app showing three tide curves for Poole Quay, in metres above Poole chart datum, UK local time:
 
-1. **Observed**: Environment Agency tide gauge 44232 "POOLE RNLI" beside Poole Quay. It reads every 15 minutes in m AOD, and the app adds 1.40 m to get chart datum.
+1. **Observed**: Environment Agency tide gauge 44232 "POOLE RNLI" beside Poole Quay. It reads every 15 minutes in m AOD, and the app adds 1.32 m to get chart datum. The nominal figure is 1.40 m, but 1.32 m is the offset the old Lilliput app calibrated against WorldTides, and it lines the gauge up with UKHO low waters.
 2. **Poole Tides model**: harmonic constituents fitted to the gauge record, plus a meteorological surge correction driven by Bournemouth Airport pressure and wind.
 3. **UKHO** (default): high and low waters from the free UKHO ADMIRALTY UK Tidal API (Discovery tier). The free tier gives events only and filters out Poole's second high water. So between events the app draws the shape of our own harmonic curve, stretched and scaled to pass exactly through UKHO's times and heights, which keeps the double high and the stand visible. Events are cached on the phone so the curve covers the whole of today.
    **WorldTides** (optional): if a WorldTides key is entered in Settings, the third curve uses WorldTides v3 continuous heights (Poole Town Quay, chart datum) instead. This is the source the old Lilliput widget used. It is paid by credits, so a fetch is reused for 12 hours.
@@ -17,7 +17,7 @@ Android app showing three tide curves for Poole Quay, in metres above Poole char
 
 **Parkstone Yacht Club wind:** I couldn't find a public archive of their station's readings, so the model uses Bournemouth Airport wind. If PYC (or Poole Harbour Commissioners) can export their logged history, it can replace or supplement the airport wind in `fit_model.py`.
 
-**Gauge QC:** rows flagged Suspect or Missing are dropped, along with readings outside −1.4 to +2.0 m AOD (instrument faults, e.g. −3.4 / +5.9 m in 2013–14) and spikes more than 0.3 m from a 2-hour rolling median. There is a gap from mid-March to late October 2025 between the two sources.
+**Gauge QC:** rows flagged Suspect or Missing are dropped, along with readings outside −1.4 to +2.0 m AOD (instrument faults, e.g. −3.4 / +5.9 m in 2013–14) and spikes more than 0.3 m from a 2-hour rolling median. The gauge bottoms out at about −1.00 m AOD, so readings at or below −0.99 m AOD are dropped too, rather than letting clipped low waters pull the fit up. There is a gap from mid-March to late October 2025 between the two sources.
 
 **Accuracy (out of sample).** Harmonics and surge were fitted on 2009–2023 only and scored on Jan 2024 – Nov 2026 (19,063 hours):
 
