@@ -15,6 +15,16 @@ class TideModelTest {
     private val fixtures = File("src/test/resources")
 
     @Test
+    fun heightAtInterpolatesAndSkipsGaps() {
+        val pts = listOf(TidePoint(0, 1.0), TidePoint(600, 2.0), TidePoint(10_000, 3.0))
+        assertEquals(1.5, Curves.at(pts, 300)!!, 1e-9)
+        assertEquals(2.0, Curves.at(pts, 600)!!, 1e-9)
+        assertEquals(null, Curves.at(pts, 5000))   // gap over an hour
+        assertEquals(null, Curves.at(pts, -1))     // before the series
+        assertEquals(null, Curves.at(pts, 20_000)) // after it
+    }
+
+    @Test
     fun kotlinMatchesPythonModel() {
         val astro = AstroTable(File(assets, "poole_astro_10min.bin").readBytes())
         val surge = SurgeModel(File(assets, "surge_model.json").readText())
