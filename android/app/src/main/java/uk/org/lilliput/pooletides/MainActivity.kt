@@ -61,6 +61,7 @@ data class UiState(
     val ukhoEvents: List<TidePoint> = emptyList(),
     val ukhoStation: String? = null,
     val thirdLabel: String = "UKHO",
+    val wtStation: String? = null,
     val nowWeather: Weather? = null,
     val messages: List<String> = emptyList(),
     val dayOffset: Int = 0,
@@ -100,16 +101,18 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
 
     /** WorldTides costs credits: reuse a fetch for 12 hours. */
     private fun worldTides(key: String, from: Long): List<TidePoint> {
-        val at = prefs.getLong("wt_cache_at", 0)
+        val at = prefs.getLong("wt_cache_at", 0).takeIf { prefs.getInt("wt_cache_v", 0) == 2 } ?: 0
         val now = Instant.now().epochSecond
         if (now - at < 12 * 3600) runCatching {
             val a = org.json.JSONArray(prefs.getString("wt_cache", "[]"))
             val pts = (0 until a.length()).map { val o = a.getJSONObject(it); TidePoint(o.getLong("t"), o.getDouble("h")) }
             if (pts.isNotEmpty()) return pts
         }
-        val pts = WorldTides.heights(key, from - from % 86400, days = 10)
+        val res = WorldTides.heights(key, from - from % 86400, days = 10)
+        val pts = res.heights
         val a = org.json.JSONArray(); pts.forEach { a.put(org.json.JSONObject().put("t", it.t).put("h", it.h)) }
-        prefs.edit().putString("wt_cache", a.toString()).putLong("wt_cache_at", now).apply()
+        prefs.edit().putString("wt_cache", a.toString()).putLong("wt_cache_at", now).putInt("wt_cache_v", 2)
+            .putString("wt_station", res.station).apply()
         return pts
     }
 
@@ -155,6 +158,7 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
             ukho = wtCurve ?: events?.let { Curves.shapedFromEvents(it, astro::heightAt) } ?: emptyList(),
             ukhoStation = prefs.getString("ukho_station_name", null),
             thirdLabel = if (wtCurve != null) "WorldTides" else "UKHO",
+            wtStation = prefs.getString("wt_station", null),
             nowWeather = wx[now - now % 3600],
             messages = msgs,
         )
@@ -206,7 +210,7 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
             Spacer(Modifier.height(8.dp))
             Legend(OBS_COLOR, "Poole Quay observed (EA gauge)", false)
             Legend(MODEL_COLOR, "Poole Tides model (gauge harmonics + Bournemouth pressure/wind)", false)
-            Legend(UKHO_COLOR, if (s.thirdLabel == "WorldTides") "WorldTides (old Lilliput app source)"
+            Legend(UKHO_COLOR, if (s.thirdLabel == "WorldTides") "WorldTides ${s.wtStation ?: "(global model)"}"
                 else "UKHO ${s.ukhoStation ?: ""} HW/LW, shaped by our harmonics", true)
             s.messages.forEach { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
             Spacer(Modifier.height(8.dp))
@@ -450,7 +454,7 @@ fun SettingsDialog(ukho: String, worldTides: String, onDismiss: () -> Unit, onSa
                 OutlinedTextField(uk, { uk = it }, singleLine = true, label = { Text("UKHO subscription key") },
                     visualTransformation = hidden)
                 Spacer(Modifier.height(12.dp))
-                Text("Optional WorldTides key (paid credits, as in the old Lilliput app). When set, the third curve uses WorldTides heights instead of UKHO.",
+                Text("Optional WorldTides key (paid credits). When set, the third curve uses WorldTides heights instead of UKHO.",
                     fontSize = 13.sp)
                 OutlinedTextField(wt, { wt = it }, singleLine = true, label = { Text("WorldTides key") },
                     visualTransformation = hidden)
