@@ -4,7 +4,7 @@ Android app showing three tide curves for Poole Quay, in metres above Poole char
 
 1. **Observed**: Environment Agency tide gauge 44232 "POOLE RNLI" beside Poole Quay. It reads every 15 minutes in m AOD, and the app adds 1.40 m to get chart datum.
 2. **Poole Tides model**: harmonic constituents fitted to the gauge record, plus a meteorological surge correction driven by Bournemouth Airport pressure and wind.
-3. **UKHO** (default): high and low waters from the free UKHO ADMIRALTY UK Tidal API (Discovery tier). This is the same UKHO data that Absolute Tides licenses. The free tier gives events only and filters out Poole's second high water. So between events the app draws the shape of our own harmonic curve, stretched and scaled to pass exactly through UKHO's times and heights, which keeps the double high and the stand visible. Events are cached on the phone so the curve covers the whole of today.
+3. **UKHO** (default): high and low waters from the free UKHO ADMIRALTY UK Tidal API (Discovery tier). The free tier gives events only and filters out Poole's second high water. So between events the app draws the shape of our own harmonic curve, stretched and scaled to pass exactly through UKHO's times and heights, which keeps the double high and the stand visible. Events are cached on the phone so the curve covers the whole of today.
    **WorldTides** (optional): if a WorldTides key is entered in Settings, the third curve uses WorldTides v3 continuous heights (Poole Town Quay, chart datum) instead. This is the source the old Lilliput widget used. It is paid by credits, so a fetch is reused for 12 hours.
 
 ## Data used for the model

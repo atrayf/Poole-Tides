@@ -204,7 +204,7 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
             Legend(OBS_COLOR, "Poole Quay observed (EA gauge)", false)
             Legend(MODEL_COLOR, "Poole Tides model (gauge harmonics + Bournemouth pressure/wind)", false)
             Legend(UKHO_COLOR, if (s.thirdLabel == "WorldTides") "WorldTides (old Lilliput app source)"
-                else "UKHO ${s.ukhoStation ?: ""} HW/LW (Absolute Tides source), shaped by our harmonics", true)
+                else "UKHO ${s.ukhoStation ?: ""} HW/LW, shaped by our harmonics", true)
             s.messages.forEach { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
             Spacer(Modifier.height(8.dp))
             Text("Heights in metres above Poole chart datum (1.40 m below ODN). Times are UK local.",

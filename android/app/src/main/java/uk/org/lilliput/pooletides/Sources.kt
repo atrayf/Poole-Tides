@@ -61,8 +61,7 @@ object BournemouthWeather {
 }
 
 /**
- * UKHO ADMIRALTY UK Tidal API, free Discovery tier (the same UKHO data that the
- * Absolute Tides app licenses). Needs a free subscription key from
+ * UKHO ADMIRALTY UK Tidal API, free Discovery tier. Needs a free subscription key from
  * https://admiraltyapi.portal.azure-api.net/ . Heights are metres above chart datum.
  */
 object Ukho {
