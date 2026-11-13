@@ -6,7 +6,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -35,9 +34,23 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-val OBS_COLOR = Color(0xFF2E7D32)
-val MODEL_COLOR = Color(0xFF1565C0)
-val UKHO_COLOR = Color(0xFFE65100)
+// Bright series colours chosen to read on the dark background
+val OBS_COLOR = Color(0xFF66BB6A)
+val MODEL_COLOR = Color(0xFF64B5F6)
+val UKHO_COLOR = Color(0xFFFFA726)
+
+/** Always-dark marine palette. */
+private val PooleDark = darkColorScheme(
+    primary = Color(0xFF7FD1F0),
+    background = Color(0xFF0B1620),
+    surface = Color(0xFF0B1620),
+    surfaceVariant = Color(0xFF16242F),
+    onBackground = Color(0xFFE3EAF0),
+    onSurface = Color(0xFFE3EAF0),
+    onSurfaceVariant = Color(0xFFA9B8C4),
+    outlineVariant = Color(0xFF2A3A47),
+    error = Color(0xFFFF8A80),
+)
 private val LONDON = ZoneId.of("Europe/London")
 
 data class UiState(
@@ -106,8 +119,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            val dark = isSystemInDarkTheme()
-            MaterialTheme(colorScheme = if (dark) darkColorScheme() else lightColorScheme()) {
+            MaterialTheme(colorScheme = PooleDark) {
                 Surface(Modifier.fillMaxSize()) { TidesScreen() }
             }
         }
@@ -176,7 +188,8 @@ fun TideChart(s: UiState, from: Long, to: Long, modifier: Modifier) {
         val left = 36.dp.toPx(); val bottom = size.height - 22.dp.toPx(); val top = 8.dp.toPx()
         val w = size.width - left
         val all = listOf(s.observed, s.model, s.ukho).flatten().filter { it.t in from..to }
-        val lo = minOf(0.0, all.minOfOrNull { it.h } ?: 0.0)
+        // Axis starts at 0.5 m; it only extends lower if a reading actually goes below that
+        val lo = minOf(0.5, kotlin.math.floor((all.minOfOrNull { it.h } ?: 0.5) * 2) / 2)
         val hi = maxOf(2.5, all.maxOfOrNull { it.h } ?: 2.5)
         fun x(t: Long) = left + w * (t - from).toFloat() / (to - from)
         fun y(h: Double) = (bottom - (bottom - top) * (h - lo) / (hi - lo)).toFloat()
