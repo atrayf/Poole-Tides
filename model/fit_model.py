@@ -23,9 +23,10 @@ import numpy as np, pandas as pd, utide
 
 DATA, OUT = sys.argv[1], sys.argv[2]
 os.makedirs(OUT, exist_ok=True)
-CD_OFFSET = 1.40          # Poole Town Quay chart datum is 1.40 m below ODN (AOD)
+CD_OFFSET = 1.32          # gauge AOD -> Poole chart datum; calibrated offset from the Lilliput app (Apr 2026)
 LAT = 50.7172
 BOUNDS_AOD = (-1.4, 2.0)  # outside this the EA record only has instrument faults
+FLOOR_AOD = -0.99         # the gauge bottoms out near -1.00 m AOD; lower lows are clipped, so drop them
 TEST_FROM = pd.Timestamp("2024-01-01", tz="UTC")
 EPOCH = "1970-01-01"
 LAGS, SMOOTH = [0, 3, 6, 12, 24], 6
@@ -45,6 +46,7 @@ g["v"] = pd.to_numeric(g["v"], errors="coerce")
 g = g.dropna().drop_duplicates("t", keep="last").set_index("t")["v"].sort_index()
 g = g.resample("15min").mean()
 g[(g < BOUNDS_AOD[0]) | (g > BOUNDS_AOD[1])] = np.nan
+g[g <= FLOOR_AOD] = np.nan
 med = g.rolling("2h", center=True).median()
 g[(g - med).abs() > 0.3] = np.nan
 g = g + CD_OFFSET
@@ -131,7 +133,7 @@ print(json.dumps(val, indent=1))
 
 json.dump({
     "station": "Poole Quay (EA 44232, POOLE RNLI)",
-    "datum": "metres above chart datum (AOD + 1.40)",
+    "datum": f"metres above chart datum (AOD + {CD_OFFSET:.2f})",
     "record": [str(hourly.first_valid_index()), str(hourly.last_valid_index())],
     "mean": float(coef.mean), "trend_m_per_day": float(coef.slope),
     "constituents": [{"name": coef.name[i], "A": float(coef.A[i]), "g": float(coef.g[i])} for i in order],
