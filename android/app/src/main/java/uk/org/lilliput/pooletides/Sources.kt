@@ -15,9 +15,9 @@ import java.time.ZoneOffset
  */
 const val CD_BELOW_ODN = 1.32
 
-private fun get(url: String, headers: Map<String, String> = emptyMap()): String {
+private fun get(url: String, headers: Map<String, String> = emptyMap(), readTimeoutMs: Int = 20000): String {
     val c = URL(url).openConnection() as HttpURLConnection
-    c.connectTimeout = 15000; c.readTimeout = 20000
+    c.connectTimeout = 15000; c.readTimeout = readTimeoutMs
     headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
     try {
         if (c.responseCode !in 200..299) error("HTTP ${c.responseCode} from ${URL(url).host}")
@@ -32,7 +32,10 @@ object PooleGauge {
 
     fun fetch(sinceEpoch: Long): List<TidePoint> {
         val since = Instant.ofEpochSecond(sinceEpoch).toString()
-        val items = JSONObject(get("$MEASURE?since=$since&_sorted&_limit=5000")).getJSONArray("items")
+        // the EA API is sometimes slow: allow 45 s and try twice
+        val url = "$MEASURE?since=$since&_sorted&_limit=5000"
+        val body = runCatching { get(url, readTimeoutMs = 45000) }.getOrElse { get(url, readTimeoutMs = 45000) }
+        val items = JSONObject(body).getJSONArray("items")
         return (0 until items.length()).mapNotNull {
             val o = items.getJSONObject(it)
             val v = o.optDouble("value", Double.NaN)
