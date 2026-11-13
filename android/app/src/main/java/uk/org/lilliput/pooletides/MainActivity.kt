@@ -81,6 +81,11 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
         get() = cleanKey(prefs.getString("wt_key", "") ?: "")
         set(v) { prefs.edit().putString("wt_key", cleanKey(v)).remove("wt_cache").remove("wt_cache_at").apply(); refresh() }
 
+    /** Which source draws the third curve: "ukho" (free) or "worldtides" (paid). */
+    var thirdSource: String
+        get() = prefs.getString("third_source", null) ?: if (worldTidesKey.isNotBlank()) "worldtides" else "ukho"
+        set(v) { prefs.edit().putString("third_source", v).apply(); refresh() }
+
     init { refresh() }
 
     /** UKHO's free tier only returns events from today; keep earlier ones so the curve covers the whole day. */
@@ -129,7 +134,7 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
             val uk = async {
                 runCatching {
                     val key = ukhoKey
-                    if (key.isBlank()) null else {
+                    if (key.isBlank() || thirdSource != "ukho") null else {
                         val id = prefs.getString("ukho_station", null) ?: Ukho.findPooleStation(key).let { (id, name) ->
                             prefs.edit().putString("ukho_station", id).putString("ukho_station_name", name).apply(); id
                         }
@@ -137,7 +142,9 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             }
-            val wt = async { runCatching { worldTidesKey.takeIf { it.isNotBlank() }?.let { worldTides(it, from) } } }
+            val wt = async {
+                runCatching { worldTidesKey.takeIf { it.isNotBlank() && thirdSource == "worldtides" }?.let { worldTides(it, from) } }
+            }
             listOf(obs.await(), wx.await(), uk.await(), wt.await())
         }
         @Suppress("UNCHECKED_CAST") val rObs = r[0] as Result<List<TidePoint>>
@@ -149,7 +156,8 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
         val wx = rWx.getOrElse { msgs += "Weather (surge correction off): ${redact(it.message, *keys)}"; emptyMap() }
         val events = rUk.getOrElse { msgs += "UKHO: ${redact(it.message, *keys)}"; null }
         val wtCurve = rWt.getOrElse { msgs += "WorldTides: ${redact(it.message, *keys)}"; null }
-        if (ukhoKey.isBlank() && wtCurve == null) msgs += "Add your free UKHO key in Settings to show the third curve."
+        if (thirdSource == "ukho" && ukhoKey.isBlank()) msgs += "Add your free UKHO key in Settings to show the third curve."
+        if (thirdSource == "worldtides" && worldTidesKey.isBlank()) msgs += "Add your WorldTides key in Settings, or switch the third curve to UKHO."
         state = state.copy(
             loading = false,
             observed = observed,
@@ -223,9 +231,10 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
         title = { Text("High and low waters – " + dayStart.format(DateTimeFormatter.ofPattern("EEE d MMM"))) },
         text = { Column { HighLowTable(s, from, to) } },
         confirmButton = { TextButton(onClick = { showTable = false }) { Text("Close") } })
-    if (showSettings) SettingsDialog(vm.ukhoKey, vm.worldTidesKey, onDismiss = { showSettings = false }) { uk, wt ->
+    if (showSettings) SettingsDialog(vm.ukhoKey, vm.worldTidesKey, vm.thirdSource, onDismiss = { showSettings = false }) { uk, wt, src ->
         if (uk != vm.ukhoKey) vm.ukhoKey = uk
         if (wt != vm.worldTidesKey) vm.worldTidesKey = wt
+        if (src != vm.thirdSource) vm.thirdSource = src
         showSettings = false
     }
 }
@@ -442,19 +451,29 @@ fun HighLowTable(s: UiState, from: Long, to: Long) {
 }
 
 @Composable
-fun SettingsDialog(ukho: String, worldTides: String, onDismiss: () -> Unit, onSave: (String, String) -> Unit) {
+fun SettingsDialog(ukho: String, worldTides: String, source: String, onDismiss: () -> Unit,
+                   onSave: (String, String, String) -> Unit) {
     var uk by remember { mutableStateOf(ukho) }
     var wt by remember { mutableStateOf(worldTides) }
+    var src by remember { mutableStateOf(source) }
     val hidden = androidx.compose.ui.text.input.PasswordVisualTransformation()
     AlertDialog(onDismissRequest = onDismiss,
-        title = { Text("Data keys") },
+        title = { Text("Settings") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Third curve", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                listOf("ukho" to "UKHO (free)", "worldtides" to "WorldTides (paid)").forEach { (value, label) ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = src == value, onClick = { src = value })
+                        Text(label, fontSize = 14.sp)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
                 Text("UKHO: free key from the ADMIRALTY Developer Portal (UK Tidal API, Discovery tier).", fontSize = 13.sp)
                 OutlinedTextField(uk, { uk = it }, singleLine = true, label = { Text("UKHO subscription key") },
                     visualTransformation = hidden)
                 Spacer(Modifier.height(12.dp))
-                Text("Optional WorldTides key (paid credits). When set, the third curve uses WorldTides heights instead of UKHO.",
+                Text("WorldTides key (paid credits), used when the third curve is set to WorldTides.",
                     fontSize = 13.sp)
                 OutlinedTextField(wt, { wt = it }, singleLine = true, label = { Text("WorldTides key") },
                     visualTransformation = hidden)
@@ -462,6 +481,6 @@ fun SettingsDialog(ukho: String, worldTides: String, onDismiss: () -> Unit, onSa
                 Text("Keys are stored only on this phone.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(uk, wt) }) { Text("Save") } },
+        confirmButton = { TextButton(onClick = { onSave(uk, wt, src) }) { Text("Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
 }
