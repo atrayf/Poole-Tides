@@ -44,4 +44,19 @@ class TideModelTest {
         assertEquals(2.0, c.first { it.t == 6 * 3600L }.h, 1e-9)
         assertEquals(1.25, c.first { it.t == 3 * 3600L }.h, 1e-9)
     }
+
+    @Test
+    fun highLowTableSkipsStandDipAndMidnight() {
+        val astro = AstroTable(File(assets, "poole_astro_10min.bin").readBytes())
+        val day = java.time.LocalDate.of(2026, 11, 14).atStartOfDay(java.time.ZoneId.of("Europe/London")).toEpochSecond()
+        val pts = (day - 86400..day + 2 * 86400 step 600L).map { TidePoint(it, astro.heightAt(it)!!) }
+        val tp = Curves.turningPoints(pts, day, day + 86400)
+        val lows = tp.filter { !it.second }; val highs = tp.filter { it.second }
+        assertEquals("two low waters", 2, lows.size)
+        assert(highs.size in 1..2)
+        assert(lows.all { it.first.h < 1.5 }) { "low waters should be true lows: $lows" }
+        assert(tp.none { it.first.t == day || it.first.t == day + 86400 }) { "no events at midnight: $tp" }
+        // alternate HW/LW
+        tp.zipWithNext().forEach { (a, b) -> assert(a.second != b.second) { "not alternating: $tp" } }
+    }
 }
