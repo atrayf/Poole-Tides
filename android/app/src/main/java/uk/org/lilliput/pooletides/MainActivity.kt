@@ -212,6 +212,7 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
     val s = vm.state
     var showSettings by remember { mutableStateOf(false) }
     var showTable by remember { mutableStateOf(false) }
+    var showKey by remember { mutableStateOf(false) }
     val dayStart = Instant.now().atZone(LONDON).toLocalDate().plusDays(s.dayOffset.toLong())
     val from = dayStart.atStartOfDay(LONDON).toEpochSecond()
     val to = from + 86400
@@ -230,10 +231,12 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
         Column(Modifier.padding(pad).padding(horizontal = 16.dp).fillMaxSize()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = { vm.shiftDay(-1) }, enabled = s.dayOffset > -2) { Text("◀") }
-                Text(dayStart.format(DateTimeFormatter.ofPattern("EEE d MMM yyyy")),
+                Text(dayStart.format(DateTimeFormatter.ofPattern("EEE d MMM")),
                     Modifier.weight(1f), fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
                 TextButton(onClick = { vm.shiftDay(1) }, enabled = s.dayOffset < 6) { Text("▶") }
-                OutlinedButton(onClick = { showTable = true }) { Text("HW / LW") }
+                OutlinedButton(onClick = { showKey = true }, contentPadding = PaddingValues(horizontal = 12.dp)) { Text("Key") }
+                Spacer(Modifier.width(6.dp))
+                OutlinedButton(onClick = { showTable = true }, contentPadding = PaddingValues(horizontal = 12.dp)) { Text("HW / LW") }
             }
             s.nowWeather?.let { NowWeather(it) }
             if (s.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -242,17 +245,25 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
             SelectedReadout(s, selT)
             Slider(value = selMin, onValueChange = { selMin = it }, valueRange = 0f..1430f, steps = 142,
                 modifier = Modifier.fillMaxWidth().height(32.dp))
-            Legend(OBS_COLOR, "Poole Quay observed (EA gauge)", false)
-            Legend(MODEL_COLOR, "Poole Tides model (gauge harmonics + Bournemouth pressure/wind)", false)
-            Legend(UKHO_COLOR, if (s.thirdLabel == "WorldTides") "WorldTides ${s.wtStation ?: "(global model)"}"
-                else "UKHO ${s.ukhoStation ?: ""} HW/LW, shaped by our harmonics", true)
             s.messages.forEach { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
-            Spacer(Modifier.height(8.dp))
-            Text("Heights in metres above Poole chart datum (gauge AOD + 1.32 m). Times are UK local.",
-                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
         }
     }
+    if (showKey) AlertDialog(onDismissRequest = { showKey = false },
+        title = { Text("Key") },
+        text = {
+            Column {
+                Legend(OBS_COLOR, "Poole Quay observed (EA gauge)", false)
+                Legend(MODEL_COLOR, "Poole Tides model (gauge harmonics + Bournemouth pressure/wind)", false)
+                Legend(UKHO_COLOR, if (s.thirdLabel == "WorldTides") "WorldTides ${s.wtStation ?: "(global model)"}"
+                    else "UKHO ${s.ukhoStation ?: ""} HW/LW, shaped by our harmonics", true)
+                Spacer(Modifier.height(12.dp))
+                Text("Heights in metres above Poole chart datum (gauge AOD + 1.32 m). Times are UK local. " +
+                    "The grey line and dots mark the time chosen on the slider.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = { TextButton(onClick = { showKey = false }) { Text("Close") } })
     if (showTable) AlertDialog(onDismissRequest = { showTable = false },
         title = { Text("High and low waters – " + dayStart.format(DateTimeFormatter.ofPattern("EEE d MMM"))) },
         text = { Column { HighLowTable(s, from, to) } },
