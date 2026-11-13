@@ -68,13 +68,18 @@ object BournemouthWeather {
 object Ukho {
     private const val BASE = "https://admiraltyapi.azure-api.net/uktidalapi/api/V1"
 
-    /** Finds the Poole station id, preferring Poole Town Quay. */
+    /**
+     * Finds the Poole station id. UKHO lists "Poole (Entrance)" (0036) and
+     * "POOLE HARBOUR" (0036A, at Poole Quay); prefer the harbour/quay station.
+     */
     fun findPooleStation(key: String): Pair<String, String> {
         val features = JSONObject(get("$BASE/Stations", mapOf("Ocp-Apim-Subscription-Key" to key)))
             .getJSONArray("features")
         val poole = (0 until features.length()).map { features.getJSONObject(it).getJSONObject("properties") }
             .filter { it.optString("Name").contains("POOLE", ignoreCase = true) }
-        val best = poole.firstOrNull { it.optString("Name").contains("QUAY", true) } ?: poole.firstOrNull()
+        val best = poole.firstOrNull { it.optString("Id") == "0036A" }
+            ?: poole.firstOrNull { it.optString("Name").contains("HARBOUR", true) || it.optString("Name").contains("QUAY", true) }
+            ?: poole.firstOrNull()
             ?: error("No Poole station in UKHO list")
         return best.getString("Id") to best.getString("Name")
     }
