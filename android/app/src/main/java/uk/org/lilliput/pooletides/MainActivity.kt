@@ -121,6 +121,18 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
         return pts
     }
 
+    /** Last good gauge readings, shown if the EA service is slow or down. */
+    private fun saveObs(pts: List<TidePoint>) {
+        if (pts.isEmpty()) return
+        val a = org.json.JSONArray(); pts.forEach { a.put(org.json.JSONObject().put("t", it.t).put("h", it.h)) }
+        prefs.edit().putString("obs_cache", a.toString()).apply()
+    }
+
+    private fun loadObs(): List<TidePoint> = runCatching {
+        val a = org.json.JSONArray(prefs.getString("obs_cache", "[]"))
+        (0 until a.length()).map { val o = a.getJSONObject(it); TidePoint(o.getLong("t"), o.getDouble("h")) }
+    }.getOrDefault(emptyList())
+
     fun shiftDay(d: Int) { state = state.copy(dayOffset = (state.dayOffset + d).coerceIn(-2, 6)) }
 
     fun refresh() = viewModelScope.launch {
@@ -152,7 +164,14 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
         @Suppress("UNCHECKED_CAST") val rUk = r[2] as Result<List<TidePoint>?>
         @Suppress("UNCHECKED_CAST") val rWt = r[3] as Result<List<TidePoint>?>
         val keys = arrayOf(ukhoKey, worldTidesKey)
-        val observed = rObs.getOrElse { msgs += "Poole Quay gauge: ${redact(it.message, *keys)}"; emptyList() }
+        val observed = rObs.fold(
+            onSuccess = { pts -> saveObs(pts); pts },
+            onFailure = {
+                val saved = loadObs().filter { p -> p.t >= from }
+                msgs += "Poole Quay gauge: ${redact(it.message, *keys)}" +
+                    if (saved.isNotEmpty()) " (showing last saved readings)" else ""
+                saved
+            })
         val wx = rWx.getOrElse { msgs += "Weather (surge correction off): ${redact(it.message, *keys)}"; emptyMap() }
         val events = rUk.getOrElse { msgs += "UKHO: ${redact(it.message, *keys)}"; null }
         val wtCurve = rWt.getOrElse { msgs += "WorldTides: ${redact(it.message, *keys)}"; null }
