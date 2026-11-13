@@ -61,6 +61,7 @@ data class UiState(
     val ukhoEvents: List<TidePoint> = emptyList(),
     val ukhoStation: String? = null,
     val thirdLabel: String = "UKHO",
+    val nowWeather: Weather? = null,
     val messages: List<String> = emptyList(),
     val dayOffset: Int = 0,
 )
@@ -154,6 +155,7 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
             ukho = wtCurve ?: events?.let { Curves.shapedFromEvents(it, astro::heightAt) } ?: emptyList(),
             ukhoStation = prefs.getString("ukho_station_name", null),
             thirdLabel = if (wtCurve != null) "WorldTides" else "UKHO",
+            nowWeather = wx[now - now % 3600],
             messages = msgs,
         )
     }
@@ -197,6 +199,7 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
                 TextButton(onClick = { vm.shiftDay(1) }, enabled = s.dayOffset < 6) { Text("▶") }
                 OutlinedButton(onClick = { showTable = true }) { Text("HW / LW") }
             }
+            s.nowWeather?.let { NowWeather(it) }
             if (s.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             // The chart takes all the height left after the legend and notes
             TideChart(s, from, to, Modifier.fillMaxWidth().weight(1f))
@@ -213,13 +216,31 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
         }
     }
     if (showTable) AlertDialog(onDismissRequest = { showTable = false },
-        title = { Text(dayStart.format(DateTimeFormatter.ofPattern("EEE d MMM"))) },
-        text = { HighLowTable(s, from, to) },
+        title = { Text("High and low waters – " + dayStart.format(DateTimeFormatter.ofPattern("EEE d MMM"))) },
+        text = { Column { HighLowTable(s, from, to) } },
         confirmButton = { TextButton(onClick = { showTable = false }) { Text("Close") } })
     if (showSettings) SettingsDialog(vm.ukhoKey, vm.worldTidesKey, onDismiss = { showSettings = false }) { uk, wt ->
         if (uk != vm.ukhoKey) vm.ukhoKey = uk
         if (wt != vm.worldTidesKey) vm.worldTidesKey = wt
         showSettings = false
+    }
+}
+
+private val COMPASS = listOf("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")
+
+/** Current Bournemouth wind and pressure, the inputs to the surge correction. */
+@Composable
+fun NowWeather(w: Weather) {
+    val kn = w.windMs * 1.943844
+    val dir = COMPASS[(((w.windFromDeg % 360) + 360) % 360 / 22.5 + 0.5).toInt() % 16]
+    Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Wind ", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("%s %.0f kn".format(dir, kn), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.width(20.dp))
+        Text("Pressure ", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("%.0f hPa".format(w.mslpHpa), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.weight(1f))
+        Text("Bournemouth, now", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -234,13 +255,27 @@ fun Legend(c: Color, label: String, dashed: Boolean) {
     }
 }
 
+/** HW/LW of the third source in [from, to]: WorldTides curve turning points, or UKHO's own events. */
+fun thirdTurningPoints(s: UiState, from: Long, to: Long): List<Pair<TidePoint, Boolean>> =
+    if (s.thirdLabel == "WorldTides") Curves.turningPoints(s.ukho, from, to)
+    else {
+        val ev = s.ukhoEvents
+        ev.mapIndexed { i, p -> p to ((ev.getOrNull(i + 1)?.let { p.h > it.h } ?: ev.getOrNull(i - 1)?.let { p.h > it.h }) ?: true) }
+            .filter { it.first.t in from..to }
+    }
+
+private data class Label(val text: String, val x: Float, val y: Float, val high: Boolean, val color: Color)
+
 @Composable
 fun TideChart(s: UiState, from: Long, to: Long, modifier: Modifier) {
+    val modelTp = remember(s.model, from) { Curves.turningPoints(s.model, from, to) }
+    val thirdTp = remember(s.ukho, s.ukhoEvents, from) { thirdTurningPoints(s, from, to) }
     val grid = MaterialTheme.colorScheme.outlineVariant
     val text = MaterialTheme.colorScheme.onSurfaceVariant
     val nowLine = MaterialTheme.colorScheme.primary
     Canvas(modifier) {
-        val left = 36.dp.toPx(); val bottom = size.height - 22.dp.toPx(); val top = 8.dp.toPx()
+        // room above and below the plot for HW/LW labels (two rows each)
+        val left = 36.dp.toPx(); val bottom = size.height - 22.dp.toPx() - 30.dp.toPx(); val top = 34.dp.toPx()
         val w = size.width - left
         val all = listOf(s.observed, s.model, s.ukho).flatten().filter { it.t in from..to }
         // Axis starts at 0.5 m; it only extends lower if a reading actually goes below that
@@ -275,9 +310,48 @@ fun TideChart(s: UiState, from: Long, to: Long, modifier: Modifier) {
             series(s.model, MODEL_COLOR, false)
             series(s.observed, OBS_COLOR, false)
         }
+        drawTurningLabels(modelTp.map { it to MODEL_COLOR } + thirdTp.map { it to UKHO_COLOR }, ::x, ::y,
+            left, size.width, 2f, size.height - 18.dp.toPx())
         val now = Instant.now().epochSecond
         if (now in from..to) drawLine(nowLine, Offset(x(now), top), Offset(x(now), bottom), 2f,
             pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
+    }
+}
+
+private val HHMM = DateTimeFormatter.ofPattern("HH:mm").withZone(LONDON)
+
+/**
+ * Labels each high/low with "time height" in its curve's colour. Highs go above
+ * the point, lows below; each label takes the first slot (nearest first, then the
+ * other side) that does not overlap a label already placed. A label with no free
+ * slot is left off rather than drawn over another.
+ */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTurningLabels(
+    pts: List<Pair<Pair<TidePoint, Boolean>, Color>>, x: (Long) -> Float, y: (Double) -> Float,
+    minX: Float, maxX: Float, minY: Float, maxY: Float,
+) {
+    val paint = android.graphics.Paint().apply { textSize = 11.sp.toPx(); isAntiAlias = true; isFakeBoldText = true }
+    val lineH = paint.fontSpacing
+    val gap = 6.dp.toPx()
+    val placed = mutableListOf<android.graphics.RectF>()
+    // label higher curve points first so the main peaks get the nearest slots
+    for ((tp, color) in pts.sortedByDescending { kotlin.math.abs(it.first.first.h - 1.6) }) {
+        val (p, high) = tp
+        val px = x(p.t); val py = y(p.h)
+        drawCircle(color, 3.dp.toPx(), Offset(px, py))
+        val text = "${HHMM.format(Instant.ofEpochSecond(p.t))} %.2f".format(p.h)
+        val w = paint.measureText(text)
+        val l = (px - w / 2).coerceIn(minX, maxX - w)
+        val above = (0..2).map { k -> py - gap - k * lineH }        // baseline candidates above
+        val below = (0..2).map { k -> py + gap + lineH * 0.8f + k * lineH }
+        val slots = if (high) above + below else below + above
+        val baseline = slots.firstOrNull { b ->
+            val r = android.graphics.RectF(l - 2, b - lineH * 0.8f, l + w + 2, b + lineH * 0.2f)
+            r.top >= minY && r.bottom <= maxY && placed.none { android.graphics.RectF.intersects(it, r) }
+        } ?: continue
+        placed += android.graphics.RectF(l - 2, baseline - lineH * 0.8f, l + w + 2, baseline + lineH * 0.2f)
+        paint.color = color.toArgb()
+        drawContext.canvas.nativeCanvas.drawText(text, l, baseline, paint)
     }
 }
 
@@ -288,8 +362,6 @@ private inline fun androidx.compose.ui.graphics.drawscope.DrawScope.clipRectSafe
 @Composable
 fun HighLowTable(s: UiState, from: Long, to: Long) {
     val fmt = DateTimeFormatter.ofPattern("HH:mm").withZone(LONDON)
-    Text("High and low waters", fontWeight = FontWeight.SemiBold)
-    val ukhoEv = s.ukhoEvents.filter { it.t in from..to }
     val model = Curves.turningPoints(s.model, from, to)
     Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
         Column(Modifier.weight(1f)) {
@@ -300,10 +372,7 @@ fun HighLowTable(s: UiState, from: Long, to: Long) {
         }
         Column(Modifier.weight(1f)) {
             Text(s.thirdLabel, color = UKHO_COLOR, fontSize = 13.sp)
-            val third = if (s.thirdLabel == "WorldTides") Curves.turningPoints(s.ukho, from, to)
-                else ukhoEv.mapIndexed { i, p ->
-                    p to ((ukhoEv.getOrNull(i + 1)?.let { p.h > it.h } ?: ukhoEv.getOrNull(i - 1)?.let { p.h > it.h }) ?: true)
-                }
+            val third = thirdTurningPoints(s, from, to)
             if (third.isEmpty()) Text("–", fontSize = 13.sp)
             third.forEach { (p, high) ->
                 Text("${if (high) "HW" else "LW"} ${fmt.format(Instant.ofEpochSecond(p.t))}  %.2f m".format(p.h), fontSize = 13.sp)
