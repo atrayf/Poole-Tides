@@ -11,8 +11,8 @@ android {
         applicationId = "uk.org.lilliput.pooletides"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.6.1"
+        versionCode = 17
+        versionName = "0.7.0"
     }
     buildTypes {
         release {

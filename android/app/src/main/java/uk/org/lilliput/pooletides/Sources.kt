@@ -50,10 +50,10 @@ object PooleGauge {
  * (free, no key): recent past plus 7-day forecast, used to drive the surge model.
  */
 object BournemouthWeather {
-    fun fetch(): Map<Long, Weather> {
+    fun fetch(pastDays: Int = 14, forecastDays: Int = 14): Map<Long, Weather> {
         val url = "https://api.open-meteo.com/v1/forecast?latitude=50.78&longitude=-1.8425" +
             "&hourly=pressure_msl,wind_speed_10m,wind_direction_10m&wind_speed_unit=ms" +
-            "&past_days=3&forecast_days=7&timezone=GMT"
+            "&past_days=$pastDays&forecast_days=$forecastDays&timezone=GMT"
         val h = JSONObject(get(url)).getJSONObject("hourly")
         val t = h.getJSONArray("time"); val p = h.getJSONArray("pressure_msl")
         val s = h.getJSONArray("wind_speed_10m"); val d = h.getJSONArray("wind_direction_10m")
@@ -69,7 +69,7 @@ object BournemouthWeather {
 
 /**
  * UKHO ADMIRALTY UK Tidal API, free Discovery tier. Needs a free subscription key from
- * https://admiraltyapi.portal.azure-api.net/ . Heights are metres above chart datum.
+ * https://developer.admiralty.co.uk . Heights are metres above chart datum.
  */
 object Ukho {
     private const val BASE = "https://admiraltyapi.azure-api.net/uktidalapi/api/V1"
