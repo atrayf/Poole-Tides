@@ -69,7 +69,7 @@ object BournemouthWeather {
 
 /**
  * UKHO ADMIRALTY UK Tidal API, free Discovery tier. Needs a free subscription key from
- * https://admiraltyapi.portal.azure-api.net/ . Heights are metres above chart datum.
+ * https://developer.admiralty.co.uk . Heights are metres above chart datum.
  */
 object Ukho {
     private const val BASE = "https://admiraltyapi.azure-api.net/uktidalapi/api/V1"
