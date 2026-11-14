@@ -6,6 +6,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -63,9 +66,14 @@ data class UiState(
     val thirdLabel: String = "UKHO",
     val wtStation: String? = null,
     val nowWeather: Weather? = null,
+    val weather: Map<Long, Weather> = emptyMap(),
     val messages: List<String> = emptyList(),
     val dayOffset: Int = 0,
 )
+
+/** How far back and ahead the app keeps and shows data, in days. */
+const val DAYS_BACK = 14
+const val DAYS_AHEAD = 13
 
 class TidesViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("poole_tides", Context.MODE_PRIVATE)
@@ -95,7 +103,7 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
                 (0 until a.length()).map { val o = a.getJSONObject(it); TidePoint(o.getLong("t"), o.getDouble("h")) }
             }
         }.getOrDefault(emptyList())
-        val cutoff = Instant.now().epochSecond - 4 * 86400
+        val cutoff = Instant.now().epochSecond - DAYS_BACK * 86400
         val firstFresh = fresh.minOfOrNull { it.t } ?: Long.MAX_VALUE
         val merged = (old.filter { it.t < firstFresh - 1800 && it.t > cutoff } + fresh).sortedBy { it.t }
         val a = org.json.JSONArray()
@@ -113,7 +121,7 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
             val pts = (0 until a.length()).map { val o = a.getJSONObject(it); TidePoint(o.getLong("t"), o.getDouble("h")) }
             if (pts.isNotEmpty()) return pts
         }
-        val res = WorldTides.heights(key, from - from % 86400, days = 10)
+        val res = WorldTides.heights(key, from - from % 86400, days = DAYS_BACK + DAYS_AHEAD + 1)
         val pts = res.heights
         val a = org.json.JSONArray(); pts.forEach { a.put(org.json.JSONObject().put("t", it.t).put("h", it.h)) }
         prefs.edit().putString("wt_cache", a.toString()).putLong("wt_cache_at", now).putInt("wt_cache_v", 2)
@@ -122,10 +130,30 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Last good gauge readings, shown if the EA service is slow or down. */
-    private fun saveObs(pts: List<TidePoint>) {
-        if (pts.isEmpty()) return
-        val a = org.json.JSONArray(); pts.forEach { a.put(org.json.JSONObject().put("t", it.t).put("h", it.h)) }
+    /** Merge fresh gauge readings into the saved ones, keep the last two weeks, and save. */
+    private fun mergeObs(fresh: List<TidePoint>): List<TidePoint> {
+        val cutoff = Instant.now().epochSecond - DAYS_BACK * 86400
+        val merged = (loadObs() + fresh).associateBy { it.t }.values.filter { it.t >= cutoff }.sortedBy { it.t }
+        val a = org.json.JSONArray(); merged.forEach { a.put(org.json.JSONObject().put("t", it.t).put("h", it.h)) }
         prefs.edit().putString("obs_cache", a.toString()).apply()
+        return merged
+    }
+
+    /** Same for Bournemouth weather: past hours are kept, forecast hours replaced by the newest fetch. */
+    private fun mergeWeather(fresh: Map<Long, Weather>): Map<Long, Weather> {
+        val cutoff = Instant.now().epochSecond - DAYS_BACK * 86400
+        val old = runCatching {
+            val a = org.json.JSONArray(prefs.getString("wx_cache", "[]"))
+            (0 until a.length()).map { val o = a.getJSONObject(it)
+                Weather(o.getLong("t"), o.getDouble("p"), o.getDouble("s"), o.getDouble("d")) }
+        }.getOrDefault(emptyList()).associateBy { it.t }
+        val merged = (old + fresh).filterKeys { it >= cutoff }
+        val a = org.json.JSONArray()
+        merged.values.sortedBy { it.t }.forEach {
+            a.put(org.json.JSONObject().put("t", it.t).put("p", it.mslpHpa).put("s", it.windMs).put("d", it.windFromDeg))
+        }
+        prefs.edit().putString("wx_cache", a.toString()).apply()
+        return merged
     }
 
     private fun loadObs(): List<TidePoint> = runCatching {
@@ -133,15 +161,17 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
         (0 until a.length()).map { val o = a.getJSONObject(it); TidePoint(o.getLong("t"), o.getDouble("h")) }
     }.getOrDefault(emptyList())
 
-    fun shiftDay(d: Int) { state = state.copy(dayOffset = (state.dayOffset + d).coerceIn(-2, 6)) }
+    fun shiftDay(d: Int) { state = state.copy(dayOffset = (state.dayOffset + d).coerceIn(-DAYS_BACK, DAYS_AHEAD)) }
 
     fun refresh() = viewModelScope.launch {
         state = state.copy(loading = true, messages = emptyList())
         val now = Instant.now().epochSecond
-        val from = now - 3 * 86400; val to = now + 7 * 86400
+        val from = now - DAYS_BACK * 86400L; val to = now + (DAYS_AHEAD + 1) * 86400L
+        // only ask the gauge for what isn't saved yet (with an hour's overlap)
+        val gaugeSince = maxOf(from, (loadObs().lastOrNull()?.t ?: 0) - 3600)
         val msgs = mutableListOf<String>()
         val r = withContext(Dispatchers.IO) {
-            val obs = async { runCatching { PooleGauge.fetch(from) } }
+            val obs = async { runCatching { PooleGauge.fetch(gaugeSince) } }
             val wx = async { runCatching { BournemouthWeather.fetch() } }
             val uk = async {
                 runCatching {
@@ -165,14 +195,14 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
         @Suppress("UNCHECKED_CAST") val rWt = r[3] as Result<List<TidePoint>?>
         val keys = arrayOf(ukhoKey, worldTidesKey)
         val observed = rObs.fold(
-            onSuccess = { pts -> saveObs(pts); pts },
+            onSuccess = { pts -> mergeObs(pts) },
             onFailure = {
-                val saved = loadObs().filter { p -> p.t >= from }
+                val saved = mergeObs(emptyList())
                 msgs += "Poole Quay gauge: ${redact(it.message, *keys)}" +
-                    if (saved.isNotEmpty()) " (showing last saved readings)" else ""
+                    if (saved.isNotEmpty()) " (showing saved readings)" else ""
                 saved
             })
-        val wx = rWx.getOrElse { msgs += "Weather (surge correction off): ${redact(it.message, *keys)}"; emptyMap() }
+        val wx = mergeWeather(rWx.getOrElse { msgs += "Weather: ${redact(it.message, *keys)} (showing saved data)"; emptyMap() })
         val events = rUk.getOrElse { msgs += "UKHO: ${redact(it.message, *keys)}"; null }
         val wtCurve = rWt.getOrElse { msgs += "WorldTides: ${redact(it.message, *keys)}"; null }
         if (thirdSource == "ukho" && ukhoKey.isBlank()) msgs += "Add your free UKHO key in Settings to show the third curve."
@@ -187,6 +217,7 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
             thirdLabel = if (wtCurve != null) "WorldTides" else "UKHO",
             wtStation = prefs.getString("wt_station", null),
             nowWeather = wx[now - now % 3600],
+            weather = wx,
             messages = msgs,
         )
     }
@@ -213,6 +244,7 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
     var showSettings by remember { mutableStateOf(false) }
     var showTable by remember { mutableStateOf(false) }
     var showKey by remember { mutableStateOf(false) }
+    var showWeather by remember { mutableStateOf(false) }
     val dayStart = Instant.now().atZone(LONDON).toLocalDate().plusDays(s.dayOffset.toLong())
     val from = dayStart.atStartOfDay(LONDON).toEpochSecond()
     val to = from + 86400
@@ -230,18 +262,26 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
     }) { pad ->
         Column(Modifier.padding(pad).padding(horizontal = 16.dp).fillMaxSize()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { vm.shiftDay(-1) }, enabled = s.dayOffset > -2) { Text("◀") }
+                TextButton(onClick = { vm.shiftDay(-1) }, enabled = s.dayOffset > -DAYS_BACK) { Text("◀") }
                 Text(dayStart.format(DateTimeFormatter.ofPattern("EEE d MMM")),
                     Modifier.weight(1f), fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-                TextButton(onClick = { vm.shiftDay(1) }, enabled = s.dayOffset < 6) { Text("▶") }
+                TextButton(onClick = { vm.shiftDay(1) }, enabled = s.dayOffset < DAYS_AHEAD) { Text("▶") }
                 OutlinedButton(onClick = { showKey = true }, contentPadding = PaddingValues(horizontal = 12.dp)) { Text("Key") }
                 Spacer(Modifier.width(6.dp))
                 OutlinedButton(onClick = { showTable = true }, contentPadding = PaddingValues(horizontal = 12.dp)) { Text("HW / LW") }
             }
-            s.nowWeather?.let { NowWeather(it) }
+            s.nowWeather?.let { NowWeather(it, onClick = { showWeather = true }) }
             if (s.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             // The chart takes all the height left after the legend and notes
-            TideChart(s, from, to, selT, Modifier.fillMaxWidth().weight(1f))
+            // swipe left for the next day, right for the previous one
+            var drag by remember { mutableStateOf(0f) }
+            TideChart(s, from, to, selT, Modifier.fillMaxWidth().weight(1f).pointerInput(Unit) {
+                val threshold = 60.dp.toPx()
+                detectHorizontalDragGestures(
+                    onDragStart = { drag = 0f },
+                    onDragEnd = { if (drag < -threshold) vm.shiftDay(1) else if (drag > threshold) vm.shiftDay(-1); drag = 0f },
+                ) { _, dx -> drag += dx }
+            })
             SelectedReadout(s, selT)
             Slider(value = selMin, onValueChange = { selMin = it }, valueRange = 0f..1430f, steps = 142,
                 modifier = Modifier.fillMaxWidth().height(32.dp))
@@ -249,6 +289,10 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
             Spacer(Modifier.height(8.dp))
         }
     }
+    if (showWeather) AlertDialog(onDismissRequest = { showWeather = false },
+        title = { Text("Bournemouth weather") },
+        text = { WeatherHistory(s.weather) },
+        confirmButton = { TextButton(onClick = { showWeather = false }) { Text("Close") } })
     if (showKey) AlertDialog(onDismissRequest = { showKey = false },
         title = { Text("Key") },
         text = {
@@ -280,17 +324,88 @@ private val COMPASS = listOf("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "
 
 /** Current Bournemouth wind and pressure, the inputs to the surge correction. */
 @Composable
-fun NowWeather(w: Weather) {
+fun NowWeather(w: Weather, onClick: () -> Unit) {
     val kn = w.windMs * 1.943844
     val dir = COMPASS[(((w.windFromDeg % 360) + 360) % 360 / 22.5 + 0.5).toInt() % 16]
-    Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text("Wind ", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text("%s %.0f kn".format(dir, kn), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.width(20.dp))
         Text("Pressure ", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text("%.0f hPa".format(w.mslpHpa), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.weight(1f))
-        Text("Bournemouth, now", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Bournemouth, now ›", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/**
+ * Pressure and wind at Bournemouth for the last two weeks and the next two days:
+ * two stacked plots sharing a time axis, with a line at now.
+ */
+@Composable
+fun WeatherHistory(wx: Map<Long, Weather>) {
+    val now = Instant.now().epochSecond
+    val from = now - DAYS_BACK * 86400L; val to = now + 2 * 86400L
+    val pts = wx.values.filter { it.t in from..to }.sortedBy { it.t }
+    if (pts.isEmpty()) { Text("No weather data yet."); return }
+    val grid = MaterialTheme.colorScheme.outlineVariant
+    val text = MaterialTheme.colorScheme.onSurfaceVariant
+    val nowC = MaterialTheme.colorScheme.primary
+    val pColor = Color(0xFFCE93D8); val wColor = Color(0xFF4DD0E1)
+    Column {
+        Row {
+            Text("Pressure (hPa)", color = pColor, fontSize = 13.sp)
+            Spacer(Modifier.width(16.dp))
+            Text("Wind (kn), ticks show direction", color = wColor, fontSize = 13.sp)
+        }
+        Canvas(Modifier.fillMaxWidth().height(340.dp)) {
+            val left = 36.dp.toPx(); val w = size.width - left
+            val gap = 18.dp.toPx(); val axis = 16.dp.toPx()
+            val ph = (size.height - gap - axis) / 2
+            fun x(t: Long) = left + w * (t - from).toFloat() / (to - from)
+            val paint = android.graphics.Paint().apply { color = text.toArgb(); textSize = 10.sp.toPx(); isAntiAlias = true }
+            fun panel(top: Float, values: List<Pair<Long, Double>>, step: Double, c: Color, fmt: String): (Double) -> Float {
+                val lo = kotlin.math.floor(values.minOf { it.second } / step) * step
+                val hi = maxOf(lo + step, kotlin.math.ceil(values.maxOf { it.second } / step) * step)
+                fun y(v: Double) = (top + ph - ph * (v - lo) / (hi - lo)).toFloat()
+                var g = lo
+                while (g <= hi + 1e-9) {
+                    drawLine(grid, Offset(left, y(g)), Offset(size.width, y(g)), 1f)
+                    drawContext.canvas.nativeCanvas.drawText(fmt.format(g), 0f, y(g) + 4, paint)
+                    g += step
+                }
+                val p = Path(); var last = 0L
+                values.forEachIndexed { i, (t, v) ->
+                    if (i == 0 || t - last > 3 * 3600) p.moveTo(x(t), y(v)) else p.lineTo(x(t), y(v)); last = t
+                }
+                drawPath(p, c, style = Stroke(2.dp.toPx()))
+                return ::y
+            }
+            panel(0f, pts.map { it.t to it.mslpHpa }, 10.0, pColor, "%.0f")
+            val wy = panel(ph + gap, pts.map { it.t to it.windMs * 1.943844 }, 10.0, wColor, "%.0f")
+            // a short tick every 12 h pointing the way the wind blows towards
+            pts.filter { it.t % (12 * 3600) == 0L }.forEach { r ->
+                val cx = x(r.t); val cy = wy(r.windMs * 1.943844)
+                val a = Math.toRadians(r.windFromDeg + 180)
+                val len = 9.dp.toPx()
+                drawLine(wColor, Offset(cx, cy), Offset(cx + (len * kotlin.math.sin(a)).toFloat(), cy - (len * kotlin.math.cos(a)).toFloat()), 2f)
+            }
+            // day ticks every two days, labelled with the day of the month
+            val dayFmt = DateTimeFormatter.ofPattern("d MMM").withZone(LONDON)
+            var d = Instant.ofEpochSecond(from).atZone(LONDON).toLocalDate().plusDays(1)
+            while (true) {
+                val t = d.atStartOfDay(LONDON).toEpochSecond()
+                if (t > to) break
+                drawLine(grid, Offset(x(t), 0f), Offset(x(t), size.height - axis), 1f)
+                if (d.dayOfMonth % 2 == 0)
+                    drawContext.canvas.nativeCanvas.drawText(dayFmt.format(Instant.ofEpochSecond(t)), x(t) + 2, size.height - 2, paint)
+                d = d.plusDays(1)
+            }
+            drawLine(nowC, Offset(x(now), 0f), Offset(x(now), size.height - axis), 2f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
+        }
+        Text("Last ${DAYS_BACK} days and next 2 days (Open-Meteo, Bournemouth Airport). Times UK local.",
+            fontSize = 12.sp, color = text)
     }
 }
 
@@ -352,11 +467,15 @@ fun TideChart(s: UiState, from: Long, to: Long, selT: Long, modifier: Modifier) 
         fun x(t: Long) = left + w * (t - from).toFloat() / (to - from)
         fun y(h: Double) = (bottom - (bottom - top) * (h - lo) / (hi - lo)).toFloat()
         val paint = android.graphics.Paint().apply { color = text.toArgb(); textSize = 11.sp.toPx(); isAntiAlias = true }
-        var gh = kotlin.math.ceil(lo * 2) / 2
-        while (gh <= hi) {
-            drawLine(grid, Offset(left, y(gh)), Offset(size.width, y(gh)), 1f)
-            drawContext.canvas.nativeCanvas.drawText("%.1f".format(gh), 0f, y(gh) + 4, paint)
-            gh += 0.5
+        // grid every 0.1 m, stronger and labelled every 0.5 m
+        var tenth = kotlin.math.ceil(lo * 10).toInt()
+        while (tenth <= hi * 10 + 1e-6) {
+            val gh = tenth / 10.0
+            if (tenth % 5 == 0) {
+                drawLine(grid, Offset(left, y(gh)), Offset(size.width, y(gh)), 1.5f)
+                drawContext.canvas.nativeCanvas.drawText("%.1f".format(gh), 0f, y(gh) + 4, paint)
+            } else drawLine(grid.copy(alpha = 0.35f), Offset(left, y(gh)), Offset(size.width, y(gh)), 1f)
+            tenth++
         }
         val hourBase = bottom + 14.dp.toPx()
         val reserved = mutableListOf<android.graphics.RectF>()
