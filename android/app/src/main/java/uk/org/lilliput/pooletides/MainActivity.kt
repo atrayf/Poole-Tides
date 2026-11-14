@@ -89,6 +89,11 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
         get() = cleanKey(prefs.getString("wt_key", "") ?: "")
         set(v) { prefs.edit().putString("wt_key", cleanKey(v)).remove("wt_cache").remove("wt_cache_at").apply(); refresh() }
 
+    /** The About page opens by itself until it has been closed once. */
+    var aboutSeen: Boolean
+        get() = prefs.getBoolean("about_seen", false)
+        set(v) { prefs.edit().putBoolean("about_seen", v).apply() }
+
     /** Which source draws the third curve: "ukho" (free), "worldtides" (paid) or "admiralty" (tide-table constants). */
     var thirdSource: String
         get() = prefs.getString("third_source", null) ?: if (worldTidesKey.isNotBlank()) "worldtides" else "ukho"
@@ -246,6 +251,7 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
     var showTable by remember { mutableStateOf(false) }
     var showKey by remember { mutableStateOf(false) }
     var showWeather by remember { mutableStateOf(false) }
+    var showAbout by remember { mutableStateOf(!vm.aboutSeen) }
     val dayStart = Instant.now().atZone(LONDON).toLocalDate().plusDays(s.dayOffset.toLong())
     val from = dayStart.atStartOfDay(LONDON).toEpochSecond()
     val to = from + 86400
@@ -259,6 +265,7 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
         TopAppBar(title = { Text("Poole Tides") }, actions = {
             TextButton(onClick = { vm.refresh() }) { Text("Refresh") }
             TextButton(onClick = { showSettings = true }) { Text("Settings") }
+            TextButton(onClick = { showAbout = true }) { Text("About") }
         })
     }) { pad ->
         Column(Modifier.padding(pad).padding(horizontal = 16.dp).fillMaxSize()) {
@@ -290,6 +297,7 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
             Spacer(Modifier.height(8.dp))
         }
     }
+    if (showAbout) AboutDialog { vm.aboutSeen = true; showAbout = false }
     if (showWeather) AlertDialog(onDismissRequest = { showWeather = false },
         title = { Text("Bournemouth weather") },
         text = { WeatherHistory(s.weather) },
@@ -629,6 +637,52 @@ fun HighLowTable(s: UiState, from: Long, to: Long) {
         }
     }
     Spacer(Modifier.height(8.dp))
+}
+
+const val CONTACT_EMAIL = "pooletideapp@trayfoot.co.uk"
+
+/** About page: what the app shows, where the data comes from, contact and disclaimer. */
+@Composable
+fun AboutDialog(onClose: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val version = remember {
+        runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: ""
+    }
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    AlertDialog(onDismissRequest = onClose,
+        title = { Text("About Poole Tides") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Version $version", fontSize = 12.sp, color = muted)
+                Spacer(Modifier.height(8.dp))
+                Text("Tide heights for Poole Quay: the Environment Agency gauge, our own prediction from 17 years " +
+                    "of gauge readings corrected for Bournemouth Airport pressure and wind, and a third curve from " +
+                    "UKHO, the ADMIRALTY tide tables or WorldTides.", fontSize = 14.sp)
+                Spacer(Modifier.height(12.dp))
+                Text("Contact", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(CONTACT_EMAIL, fontSize = 14.sp, color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable {
+                        runCatching {
+                            ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_SENDTO,
+                                android.net.Uri.parse("mailto:$CONTACT_EMAIL"))
+                                .putExtra(android.content.Intent.EXTRA_SUBJECT, "Poole Tides $version"))
+                        }
+                    }.padding(vertical = 4.dp))
+                Spacer(Modifier.height(12.dp))
+                Text("Disclaimer", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text("Poole Tides is for general information only and must not be used for navigation. " +
+                    "Predictions are estimates and actual water levels can differ by tens of centimetres or more, " +
+                    "especially in strong winds, storm surges or unusual pressure. Gauge readings and third-party data " +
+                    "can be late, missing or wrong. Always check official sources, such as the ADMIRALTY tide tables, " +
+                    "Poole Harbour Commissioners and local notices, and use your own judgement. The app is provided " +
+                    "as is, without warranty, and the authors accept no liability for any loss or damage arising from its use.",
+                    fontSize = 13.sp)
+                Spacer(Modifier.height(12.dp))
+                Text("Data: Environment Agency flood-monitoring API (Open Government Licence), Open-Meteo, " +
+                    "UK Hydrographic Office (ADMIRALTY), WorldTides.", fontSize = 12.sp, color = muted)
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("OK") } })
 }
 
 @Composable
