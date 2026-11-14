@@ -89,7 +89,7 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
         get() = cleanKey(prefs.getString("wt_key", "") ?: "")
         set(v) { prefs.edit().putString("wt_key", cleanKey(v)).remove("wt_cache").remove("wt_cache_at").apply(); refresh() }
 
-    /** Which source draws the third curve: "ukho" (free) or "worldtides" (paid). */
+    /** Which source draws the third curve: "ukho" (free), "worldtides" (paid) or "admiralty" (tide-table constants). */
     var thirdSource: String
         get() = prefs.getString("third_source", null) ?: if (worldTidesKey.isNotBlank()) "worldtides" else "ukho"
         set(v) { prefs.edit().putString("third_source", v).apply(); refresh() }
@@ -206,15 +206,16 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
         val events = rUk.getOrElse { msgs += "UKHO: ${redact(it.message, *keys)}"; null }
         val wtCurve = rWt.getOrElse { msgs += "WorldTides: ${redact(it.message, *keys)}"; null }
         if (thirdSource == "ukho" && ukhoKey.isBlank()) msgs += "Add your free UKHO key in Settings to show the third curve."
+        val shm = if (thirdSource == "admiralty") AdmiraltyShm.curve(from, to) else null
         if (thirdSource == "worldtides" && worldTidesKey.isBlank()) msgs += "Add your WorldTides key in Settings, or switch the third curve to UKHO."
         state = state.copy(
             loading = false,
             observed = observed,
             model = Curves.model(astro, surge, wx, from, to),
             ukhoEvents = events ?: emptyList(),
-            ukho = wtCurve ?: events?.let { Curves.shapedFromEvents(it, astro::heightAt) } ?: emptyList(),
+            ukho = shm ?: wtCurve ?: events?.let { Curves.shapedFromEvents(it, astro::heightAt) } ?: emptyList(),
             ukhoStation = prefs.getString("ukho_station_name", null),
-            thirdLabel = if (wtCurve != null) "WorldTides" else "UKHO",
+            thirdLabel = if (shm != null) "ADMIRALTY" else if (wtCurve != null) "WorldTides" else "UKHO",
             wtStation = prefs.getString("wt_station", null),
             nowWeather = wx[now - now % 3600],
             weather = wx,
@@ -299,7 +300,8 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
             Column {
                 Legend(OBS_COLOR, "Poole Quay observed (EA gauge)", false)
                 Legend(MODEL_COLOR, "Poole Tides model (gauge harmonics + Bournemouth pressure/wind)", false)
-                Legend(UKHO_COLOR, if (s.thirdLabel == "WorldTides") "WorldTides ${s.wtStation ?: "(global model)"}"
+                Legend(UKHO_COLOR, if (s.thirdLabel == "ADMIRALTY") "ADMIRALTY tide tables, Poole Harbour (36A) constants, NP159 method"
+                    else if (s.thirdLabel == "WorldTides") "WorldTides ${s.wtStation ?: "(global model)"}"
                     else "UKHO ${s.ukhoStation ?: ""} HW/LW, shaped by our harmonics", true)
                 Spacer(Modifier.height(12.dp))
                 Text("Heights in metres above Poole chart datum (gauge AOD + 1.32 m). Times are UK local. " +
@@ -436,7 +438,7 @@ fun Legend(c: Color, label: String, dashed: Boolean) {
 
 /** HW/LW of the third source in [from, to]: WorldTides curve turning points, or UKHO's own events. */
 fun thirdTurningPoints(s: UiState, from: Long, to: Long): List<Pair<TidePoint, Boolean>> =
-    if (s.thirdLabel == "WorldTides") Curves.turningPoints(s.ukho, from, to)
+    if (s.thirdLabel != "UKHO") Curves.turningPoints(s.ukho, from, to)
     else {
         val ev = s.ukhoEvents
         ev.mapIndexed { i, p -> p to ((ev.getOrNull(i + 1)?.let { p.h > it.h } ?: ev.getOrNull(i - 1)?.let { p.h > it.h }) ?: true) }
@@ -641,7 +643,7 @@ fun SettingsDialog(ukho: String, worldTides: String, source: String, onDismiss: 
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("Third curve", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                listOf("ukho" to "UKHO (free)", "worldtides" to "WorldTides (paid)").forEach { (value, label) ->
+                listOf("ukho" to "UKHO (free)", "admiralty" to "ADMIRALTY tide tables (no key)", "worldtides" to "WorldTides (paid)").forEach { (value, label) ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(selected = src == value, onClick = { src = value })
                         Text(label, fontSize = 14.sp)

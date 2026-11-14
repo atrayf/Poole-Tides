@@ -14,6 +14,15 @@ class TideModelTest {
     private val assets = File("src/main/assets")
     private val fixtures = File("src/test/resources")
 
+    /** Values from the Python prototype of the NP159 method (model/admiralty_shm.py). */
+    @Test
+    fun admiraltyShmMatchesPython() {
+        val expected = listOf(1794528000L to 1.8982, 1794538800L to 1.7388, 1794549600L to 0.9305, 1794560400L to 1.8826,
+            1794571200L to 2.0157, 1794582000L to 1.6785, 1794592800L to 0.8265, 1794603600L to 1.5739,
+            1813555200L to 0.5938, 1813580400L to 1.7893, 1813605600L to 1.5628)
+        for ((t, h) in expected) assertEquals("t=$t", h, AdmiraltyShm.heightAt(t), 0.002)
+    }
+
     @Test
     fun heightAtInterpolatesAndSkipsGaps() {
         val pts = listOf(TidePoint(0, 1.0), TidePoint(600, 2.0), TidePoint(10_000, 3.0))
