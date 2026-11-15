@@ -300,7 +300,7 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
     if (showAbout) AboutDialog { vm.aboutSeen = true; showAbout = false }
     if (showWeather) AlertDialog(onDismissRequest = { showWeather = false },
         title = { Text("Bournemouth weather") },
-        text = { WeatherHistory(s.weather) },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) { WeatherHistory(s.weather) } },
         confirmButton = { TextButton(onClick = { showWeather = false }) { Text("Close") } })
     if (showKey) AlertDialog(onDismissRequest = { showKey = false },
         title = { Text("Key") },
@@ -363,15 +363,15 @@ fun WeatherHistory(wx: Map<Long, Weather>) {
     val nowC = MaterialTheme.colorScheme.primary
     val pColor = Color(0xFFCE93D8); val wColor = Color(0xFF4DD0E1)
     Column {
-        Row {
+        Column {
             Text("Pressure (hPa)", color = pColor, fontSize = 13.sp)
-            Spacer(Modifier.width(16.dp))
-            Text("Wind (kn), ticks show direction", color = wColor, fontSize = 13.sp)
+            Text("Wind (kn), and the direction it blows from", color = wColor, fontSize = 13.sp)
         }
-        Canvas(Modifier.fillMaxWidth().height(340.dp)) {
+        Canvas(Modifier.fillMaxWidth().height(410.dp)) {
             val left = 36.dp.toPx(); val w = size.width - left
             val gap = 18.dp.toPx(); val axis = 16.dp.toPx()
-            val ph = (size.height - gap - axis) / 2
+            val dh = 70.dp.toPx()  // wind direction strip
+            val ph = (size.height - 2 * gap - axis - dh) / 2
             fun x(t: Long) = left + w * (t - from).toFloat() / (to - from)
             val paint = android.graphics.Paint().apply { color = text.toArgb(); textSize = 10.sp.toPx(); isAntiAlias = true }
             fun panel(top: Float, values: List<Pair<Long, Double>>, step: Double, c: Color, fmt: String): (Double) -> Float {
@@ -392,14 +392,16 @@ fun WeatherHistory(wx: Map<Long, Weather>) {
                 return ::y
             }
             panel(0f, pts.map { it.t to it.mslpHpa }, 10.0, pColor, "%.0f")
-            val wy = panel(ph + gap, pts.map { it.t to it.windMs * 1.943844 }, 10.0, wColor, "%.0f")
-            // a short tick every 12 h pointing the way the wind blows towards
-            pts.filter { it.t % (12 * 3600) == 0L }.forEach { r ->
-                val cx = x(r.t); val cy = wy(r.windMs * 1.943844)
-                val a = Math.toRadians(r.windFromDeg + 180)
-                val len = 9.dp.toPx()
-                drawLine(wColor, Offset(cx, cy), Offset(cx + (len * kotlin.math.sin(a)).toFloat(), cy - (len * kotlin.math.cos(a)).toFloat()), 2f)
+            panel(ph + gap, pts.map { it.t to it.windMs * 1.943844 }, 10.0, wColor, "%.0f")
+            // wind direction (where it blows from) as hourly dots on a N-E-S-W-N scale
+            val dTop = 2 * ph + 2 * gap
+            fun dy(deg: Double) = (dTop + dh * (((deg % 360) + 360) % 360) / 360).toFloat()
+            listOf("N", "E", "S", "W", "N").forEachIndexed { i, lab ->
+                val y = dTop + dh * i / 4
+                drawLine(grid, Offset(left, y), Offset(size.width, y), 1f)
+                drawContext.canvas.nativeCanvas.drawText(lab, 0f, y + 4, paint)
             }
+            pts.forEach { r -> drawCircle(wColor, 1.8.dp.toPx(), Offset(x(r.t), dy(r.windFromDeg))) }
             // day ticks every two days, labelled with the day of the month
             val dayFmt = DateTimeFormatter.ofPattern("d MMM").withZone(LONDON)
             var d = Instant.ofEpochSecond(from).atZone(LONDON).toLocalDate().plusDays(1)
