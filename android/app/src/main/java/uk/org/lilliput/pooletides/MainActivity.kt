@@ -367,9 +367,9 @@ fun WeatherHistory(wx: Map<Long, Weather>) {
             Text("Pressure (hPa)", color = pColor, fontSize = 13.sp)
             Text("Wind (kn), and the direction it blows from", color = wColor, fontSize = 13.sp)
         }
-        Canvas(Modifier.fillMaxWidth().height(410.dp)) {
+        Canvas(Modifier.fillMaxWidth().height(428.dp)) {
             val left = 36.dp.toPx(); val w = size.width - left
-            val gap = 18.dp.toPx(); val axis = 16.dp.toPx()
+            val gap = 18.dp.toPx(); val axis = 34.dp.toPx()
             val dh = 70.dp.toPx()  // wind direction strip
             val ph = (size.height - 2 * gap - axis - dh) / 2
             fun x(t: Long) = left + w * (t - from).toFloat() / (to - from)
@@ -402,16 +402,34 @@ fun WeatherHistory(wx: Map<Long, Weather>) {
                 drawContext.canvas.nativeCanvas.drawText(lab, 0f, y + 4, paint)
             }
             pts.forEach { r -> drawCircle(wColor, 1.8.dp.toPx(), Offset(x(r.t), dy(r.windFromDeg))) }
-            // day ticks every two days, labelled with the day of the month
-            val dayFmt = DateTimeFormatter.ofPattern("d MMM").withZone(LONDON)
-            var d = Instant.ofEpochSecond(from).atZone(LONDON).toLocalDate().plusDays(1)
+            // day lines; day numbers centred in each day, then a band naming each month
+            val plotBottom = size.height - axis
+            val dayRow = plotBottom + 12.dp.toPx()
+            val monthTop = plotBottom + 16.dp.toPx()
+            val centred = android.graphics.Paint(paint).apply { textAlign = android.graphics.Paint.Align.CENTER }
+            var d = Instant.ofEpochSecond(from).atZone(LONDON).toLocalDate()
             while (true) {
-                val t = d.atStartOfDay(LONDON).toEpochSecond()
-                if (t > to) break
-                drawLine(grid, Offset(x(t), 0f), Offset(x(t), size.height - axis), 1f)
-                if (d.dayOfMonth % 2 == 0)
-                    drawContext.canvas.nativeCanvas.drawText(dayFmt.format(Instant.ofEpochSecond(t)), x(t) + 2, size.height - 2, paint)
+                val t0 = d.atStartOfDay(LONDON).toEpochSecond()
+                if (t0 > to) break
+                val t1 = d.plusDays(1).atStartOfDay(LONDON).toEpochSecond()
+                if (t0 >= from) drawLine(grid, Offset(x(t0), 0f), Offset(x(t0), plotBottom), 1f)
+                val mid = x((maxOf(t0, from) + minOf(t1, to)) / 2)
+                if (t1 - maxOf(t0, from) > 43200 && minOf(t1, to) - t0 > 43200)
+                    drawContext.canvas.nativeCanvas.drawText(d.dayOfMonth.toString(), mid, dayRow, centred)
                 d = d.plusDays(1)
+            }
+            var m = Instant.ofEpochSecond(from).atZone(LONDON).toLocalDate().withDayOfMonth(1)
+            val monthFmt = DateTimeFormatter.ofPattern("MMMM yyyy")
+            while (true) {
+                val m0 = m.atStartOfDay(LONDON).toEpochSecond()
+                if (m0 > to) break
+                val xa = x(maxOf(m0, from)); val xb = x(minOf(m.plusMonths(1).atStartOfDay(LONDON).toEpochSecond(), to))
+                drawRect(grid.copy(alpha = 0.35f), Offset(xa, monthTop), androidx.compose.ui.geometry.Size(xb - xa, size.height - monthTop))
+                if (m0 >= from) drawLine(text, Offset(xa, plotBottom), Offset(xa, size.height), 1.5f)
+                val label = m.format(monthFmt)
+                if (xb - xa > centred.measureText(label) + 8)
+                    drawContext.canvas.nativeCanvas.drawText(label, (xa + xb) / 2, size.height - 4.dp.toPx(), centred)
+                m = m.plusMonths(1)
             }
             drawLine(nowC, Offset(x(now), 0f), Offset(x(now), size.height - axis), 2f,
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
