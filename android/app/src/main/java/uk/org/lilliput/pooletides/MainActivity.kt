@@ -690,6 +690,43 @@ fun AboutDialog(onClose: () -> Unit) {
         confirmButton = { TextButton(onClick = onClose) { Text("OK") } })
 }
 
+/** Step-by-step instructions for getting the UKHO and WorldTides keys, with links. */
+@Composable
+fun KeyHelpDialog(onClose: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val linkColor = MaterialTheme.colorScheme.primary
+    @Composable fun Link(text: String, url: String) = Text(text, fontSize = 14.sp, color = linkColor,
+        modifier = Modifier.clickable {
+            runCatching { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))) }
+        }.padding(vertical = 4.dp))
+    @Composable fun Step(n: Int, text: String) = Text("$n. $text", fontSize = 13.sp, modifier = Modifier.padding(vertical = 2.dp))
+    AlertDialog(onDismissRequest = onClose,
+        title = { Text("Getting the API keys") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("UKHO (free)", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Link("developer.admiralty.co.uk", "https://developer.admiralty.co.uk")
+                Step(1, "Sign up for a free account on the ADMIRALTY Developer Portal and sign in.")
+                Step(2, "Open Products, choose UK Tidal API – Discovery and subscribe. The Discovery tier is free.")
+                Step(3, "Go to your Profile. Under Subscriptions, press Show next to the Primary key.")
+                Step(4, "Copy the key and paste it into UKHO subscription key in Settings, then press Save.")
+                Link("Open my Profile page", "https://developer.admiralty.co.uk/profile")
+                Spacer(Modifier.height(16.dp))
+                Text("WorldTides (paid)", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Link("worldtides.info", "https://www.worldtides.info")
+                Step(1, "Register for an account at worldtides.info and sign in.")
+                Step(2, "Buy credits if you need them. Each refresh uses credits; the app caches results for 12 hours.")
+                Step(3, "Open the API key page from your account and copy the key.")
+                Step(4, "Paste it into WorldTides key in Settings, choose WorldTides as the third curve, then press Save.")
+                Link("Open the API key page", "https://www.worldtides.info/apikey")
+                Spacer(Modifier.height(12.dp))
+                Text("Keys are stored only on this phone. Don't share them; if one leaks, regenerate it on the provider's site.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Close") } })
+}
+
 @Composable
 fun SettingsDialog(ukho: String, worldTides: String, source: String, onDismiss: () -> Unit,
                    onSave: (String, String, String) -> Unit) {
@@ -697,6 +734,8 @@ fun SettingsDialog(ukho: String, worldTides: String, source: String, onDismiss: 
     var wt by remember { mutableStateOf(worldTides) }
     var src by remember { mutableStateOf(source) }
     val hidden = androidx.compose.ui.text.input.PasswordVisualTransformation()
+    var showHelp by remember { mutableStateOf(false) }
+    if (showHelp) KeyHelpDialog { showHelp = false }
     AlertDialog(onDismissRequest = onDismiss,
         title = { Text("Settings") },
         text = {
@@ -708,6 +747,8 @@ fun SettingsDialog(ukho: String, worldTides: String, source: String, onDismiss: 
                         Text(label, fontSize = 14.sp)
                     }
                 }
+                Spacer(Modifier.height(4.dp))
+                OutlinedButton(onClick = { showHelp = true }) { Text("How to get the API keys") }
                 Spacer(Modifier.height(8.dp))
                 Text("UKHO: free key from the ADMIRALTY Developer Portal (UK Tidal API, Discovery tier).", fontSize = 13.sp)
                 OutlinedTextField(uk, { uk = it }, singleLine = true, label = { Text("UKHO subscription key") },
