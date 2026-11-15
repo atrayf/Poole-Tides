@@ -166,6 +166,8 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
         (0 until a.length()).map { val o = a.getJSONObject(it); TidePoint(o.getLong("t"), o.getDouble("h")) }
     }.getOrDefault(emptyList())
 
+    fun goToday() { state = state.copy(dayOffset = 0) }
+
     fun shiftDay(d: Int) { state = state.copy(dayOffset = (state.dayOffset + d).coerceIn(-DAYS_BACK, DAYS_AHEAD)) }
 
     fun refresh() = viewModelScope.launch {
@@ -291,8 +293,16 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
                 ) { _, dx -> drag += dx }
             })
             SelectedReadout(s, selT)
-            Slider(value = selMin, onValueChange = { selMin = it }, valueRange = 0f..1430f, steps = 142,
-                modifier = Modifier.fillMaxWidth().height(32.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Slider(value = selMin, onValueChange = { selMin = it }, valueRange = 0f..1430f, steps = 142,
+                    modifier = Modifier.weight(1f).height(32.dp))
+                Spacer(Modifier.width(8.dp))
+                // back to today, with the time line at the current time (nearest 10 minutes)
+                OutlinedButton(onClick = {
+                    vm.goToday()
+                    selMin = java.time.LocalTime.now(LONDON).let { ((it.hour * 60 + it.minute + 5) / 10 * 10).coerceAtMost(1430) }.toFloat()
+                }, contentPadding = PaddingValues(horizontal = 12.dp)) { Text("Now") }
+            }
             s.messages.forEach { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
             Spacer(Modifier.height(8.dp))
         }
