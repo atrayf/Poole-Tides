@@ -320,7 +320,7 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
         confirmButton = { TextButton(onClick = { showKey = false }) { Text("Close") } })
     if (showTable) AlertDialog(onDismissRequest = { showTable = false },
         title = { Text("High and low waters – " + dayStart.format(DateTimeFormatter.ofPattern("EEE d MMM"))) },
-        text = { Column { HighLowTable(s, from, to) } },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) { HighLowTable(s, from, to) } },
         confirmButton = { TextButton(onClick = { showTable = false }) { Text("Close") } })
     if (showSettings) SettingsDialog(vm.ukhoKey, vm.worldTidesKey, vm.thirdSource, onDismiss = { showSettings = false }) { uk, wt, src ->
         if (uk != vm.ukhoKey) vm.ukhoKey = uk
@@ -619,24 +619,29 @@ private inline fun androidx.compose.ui.graphics.drawscope.DrawScope.clipRectSafe
 @Composable
 fun HighLowTable(s: UiState, from: Long, to: Long) {
     val fmt = DateTimeFormatter.ofPattern("HH:mm").withZone(LONDON)
+    // gauge readings are noisy: same 75-minute running mean as the chart labels
+    val actual = remember(s.observed, from) { Curves.turningPoints(Curves.smooth(s.observed, 2), from, to) }
     val model = Curves.turningPoints(s.model, from, to)
+    val third = thirdTurningPoints(s, from, to)
     Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-        Column(Modifier.weight(1f)) {
-            Text("Poole Tides model", color = MODEL_COLOR, fontSize = 13.sp)
-            model.forEach { (p, high) ->
-                Text("${if (high) "HW" else "LW"} ${fmt.format(Instant.ofEpochSecond(p.t))}  %.2f m".format(p.h), fontSize = 13.sp)
-            }
-        }
-        Column(Modifier.weight(1f)) {
-            Text(s.thirdLabel, color = UKHO_COLOR, fontSize = 13.sp)
-            val third = thirdTurningPoints(s, from, to)
-            if (third.isEmpty()) Text("–", fontSize = 13.sp)
-            third.forEach { (p, high) ->
-                Text("${if (high) "HW" else "LW"} ${fmt.format(Instant.ofEpochSecond(p.t))}  %.2f m".format(p.h), fontSize = 13.sp)
-            }
-        }
+        HighLowColumn("Actual (gauge)", OBS_COLOR, actual, fmt, Modifier.weight(1f))
+        HighLowColumn("Poole Tides model", MODEL_COLOR, model, fmt, Modifier.weight(1f))
+        HighLowColumn(s.thirdLabel, UKHO_COLOR, third, fmt, Modifier.weight(1f))
     }
     Spacer(Modifier.height(8.dp))
+}
+
+@Composable
+private fun HighLowColumn(title: String, color: Color, tps: List<Pair<TidePoint, Boolean>>,
+                          fmt: DateTimeFormatter, modifier: Modifier) {
+    Column(modifier) {
+        Text(title, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        if (tps.isEmpty()) Text("–", fontSize = 12.sp)
+        tps.forEach { (p, high) ->
+            Text("${if (high) "HW" else "LW"} ${fmt.format(Instant.ofEpochSecond(p.t))}", fontSize = 12.sp)
+            Text("%.2f m".format(p.h), fontSize = 12.sp, modifier = Modifier.padding(start = 22.dp, bottom = 2.dp))
+        }
+    }
 }
 
 const val CONTACT_EMAIL = "pooletideapp@trayfoot.co.uk"
