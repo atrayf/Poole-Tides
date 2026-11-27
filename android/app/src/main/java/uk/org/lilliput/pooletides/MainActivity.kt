@@ -99,8 +99,6 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
         get() = prefs.getString("third_source", null) ?: if (worldTidesKey.isNotBlank()) "worldtides" else "ukho"
         set(v) { prefs.edit().putString("third_source", v).apply(); refresh() }
 
-    init { refresh() }
-
     /** UKHO's free tier only returns events from today; keep earlier ones so the curve covers the whole day. */
     private fun mergeUkhoCache(fresh: List<TidePoint>): List<TidePoint> {
         val old = runCatching {
@@ -170,65 +168,133 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun shiftDay(d: Int) { state = state.copy(dayOffset = (state.dayOffset + d).coerceIn(-DAYS_BACK, DAYS_AHEAD)) }
 
-    fun refresh() = viewModelScope.launch {
-        state = state.copy(loading = true, messages = emptyList())
+    private fun loadPoints(key: String): List<TidePoint> = runCatching {
+        val a = org.json.JSONArray(prefs.getString(key, "[]"))
+        (0 until a.length()).map { val o = a.getJSONObject(it); TidePoint(o.getLong("t"), o.getDouble("h")) }
+    }.getOrDefault(emptyList())
+
+    /** True unless Android says there is no network with internet at all (airplane mode, Wi-Fi and data off). */
+    private fun hasNetwork(): Boolean = runCatching {
+        val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }.getOrDefault(true)
+
+    // Latest data for each source; the screen is rebuilt from these whenever one changes.
+    private var cObs: List<TidePoint> = emptyList()
+    private var cWx: Map<Long, Weather> = emptyMap()
+    private var cEvents: List<TidePoint>? = null
+    private var cWt: List<TidePoint>? = null
+    private val msgs = linkedMapOf<String, String>()
+    private var refreshJob: kotlinx.coroutines.Job? = null
+
+    /** Redraws from whatever is held now. Cheap: all local arithmetic. */
+    private suspend fun publish(loading: Boolean) {
         val now = Instant.now().epochSecond
         val from = now - DAYS_BACK * 86400L; val to = now + (DAYS_AHEAD + 1) * 86400L
-        // only ask the gauge for what isn't saved yet (with an hour's overlap)
-        val gaugeSince = maxOf(from, (loadObs().lastOrNull()?.t ?: 0) - 3600)
-        val msgs = mutableListOf<String>()
-        val r = withContext(Dispatchers.IO) {
-            val obs = async { runCatching { PooleGauge.fetch(gaugeSince) } }
-            val wx = async { runCatching { BournemouthWeather.fetch() } }
-            val uk = async {
-                runCatching {
-                    val key = ukhoKey
-                    if (key.isBlank() || thirdSource != "ukho") null else {
-                        val id = prefs.getString("ukho_station", null) ?: Ukho.findPooleStation(key).let { (id, name) ->
-                            prefs.edit().putString("ukho_station", id).putString("ukho_station_name", name).apply(); id
-                        }
-                        mergeUkhoCache(Ukho.events(key, id))
-                    }
-                }
-            }
-            val wt = async {
-                runCatching { worldTidesKey.takeIf { it.isNotBlank() && thirdSource == "worldtides" }?.let { worldTides(it, from) } }
-            }
-            listOf(obs.await(), wx.await(), uk.await(), wt.await())
+        val src = thirdSource
+        val notes = msgs.values.toMutableList()
+        if (src == "ukho" && ukhoKey.isBlank()) notes += "Add your free UKHO key in Settings to show the third curve."
+        if (src == "worldtides" && worldTidesKey.isBlank()) notes += "Add your WorldTides key in Settings, or switch the third curve to UKHO."
+        val obs = cObs; val wx = cWx; val events = cEvents; val wt = cWt
+        val (model, third, shm) = withContext(Dispatchers.Default) {
+            val shm = if (src == "admiralty") AdmiraltyShm.curve(from, to) else null
+            Triple(Curves.model(astro, surge, wx, from, to),
+                shm ?: wt ?: events?.let { Curves.shapedFromEvents(it, astro::heightAt) } ?: emptyList(), shm)
         }
-        @Suppress("UNCHECKED_CAST") val rObs = r[0] as Result<List<TidePoint>>
-        @Suppress("UNCHECKED_CAST") val rWx = r[1] as Result<Map<Long, Weather>>
-        @Suppress("UNCHECKED_CAST") val rUk = r[2] as Result<List<TidePoint>?>
-        @Suppress("UNCHECKED_CAST") val rWt = r[3] as Result<List<TidePoint>?>
-        val keys = arrayOf(ukhoKey, worldTidesKey)
-        val observed = rObs.fold(
-            onSuccess = { pts -> mergeObs(pts) },
-            onFailure = {
-                val saved = mergeObs(emptyList())
-                msgs += "Poole Quay gauge: ${redact(it.message, *keys)}" +
-                    if (saved.isNotEmpty()) " (showing saved readings)" else ""
-                saved
-            })
-        val wx = mergeWeather(rWx.getOrElse { msgs += "Weather: ${redact(it.message, *keys)} (showing saved data)"; emptyMap() })
-        val events = rUk.getOrElse { msgs += "UKHO: ${redact(it.message, *keys)}"; null }
-        val wtCurve = rWt.getOrElse { msgs += "WorldTides: ${redact(it.message, *keys)}"; null }
-        if (thirdSource == "ukho" && ukhoKey.isBlank()) msgs += "Add your free UKHO key in Settings to show the third curve."
-        val shm = if (thirdSource == "admiralty") AdmiraltyShm.curve(from, to) else null
-        if (thirdSource == "worldtides" && worldTidesKey.isBlank()) msgs += "Add your WorldTides key in Settings, or switch the third curve to UKHO."
         state = state.copy(
-            loading = false,
-            observed = observed,
-            model = Curves.model(astro, surge, wx, from, to),
+            loading = loading,
+            observed = obs,
+            model = model,
             ukhoEvents = events ?: emptyList(),
-            ukho = shm ?: wtCurve ?: events?.let { Curves.shapedFromEvents(it, astro::heightAt) } ?: emptyList(),
+            ukho = third,
             ukhoStation = prefs.getString("ukho_station_name", null),
-            thirdLabel = if (shm != null) "ADMIRALTY" else if (wtCurve != null) "WorldTides" else "UKHO",
+            thirdLabel = if (shm != null) "ADMIRALTY" else if (wt != null) "WorldTides" else "UKHO",
             wtStation = prefs.getString("wt_station", null),
             nowWeather = wx[now - now % 3600],
             weather = wx,
-            messages = msgs,
+            messages = notes,
         )
     }
+
+    /**
+     * Shows the saved data and the model straight away, then fetches each source in the
+     * background and redraws as each one arrives. With no network it does not try at all.
+     */
+    fun refresh() {
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
+            val src = thirdSource
+            val keys = arrayOf(ukhoKey, worldTidesKey)
+            // 1. saved data first, so the chart appears at once
+            withContext(Dispatchers.IO) {
+                cObs = mergeObs(emptyList())
+                cWx = mergeWeather(emptyMap())
+                cEvents = if (src == "ukho" && ukhoKey.isNotBlank()) loadPoints("ukho_cache").takeIf { it.isNotEmpty() } else null
+                cWt = if (src == "worldtides" && worldTidesKey.isNotBlank()) loadPoints("wt_cache").takeIf { it.isNotEmpty() } else null
+            }
+            msgs.clear()
+            if (!hasNetwork()) {
+                msgs["offline"] = "Offline: showing saved data. Tap Refresh when you are back online."
+                publish(loading = false)
+                return@launch
+            }
+            publish(loading = true)
+
+            // 2. each source on its own, redrawing as it lands
+            val now = Instant.now().epochSecond
+            val from = now - DAYS_BACK * 86400L
+            val gaugeSince = maxOf(from, (cObs.lastOrNull()?.t ?: 0) - 3600)
+            val jobs = listOf(
+                launch {
+                    runCatching { withContext(Dispatchers.IO) { mergeObs(PooleGauge.fetch(gaugeSince)) } }
+                        .onSuccess { cObs = it }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it
+                            msgs["obs"] = "Poole Quay gauge: ${redact(it.message, *keys)}" +
+                                if (cObs.isNotEmpty()) " (showing saved readings)" else "" }
+                    publish(loading = true)
+                },
+                launch {
+                    runCatching { withContext(Dispatchers.IO) { mergeWeather(BournemouthWeather.fetch()) } }
+                        .onSuccess { cWx = it }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it
+                            msgs["wx"] = "Weather: ${redact(it.message, *keys)} (showing saved data)" }
+                    publish(loading = true)
+                },
+                launch {
+                    val key = ukhoKey
+                    if (key.isBlank() || src != "ukho") return@launch
+                    runCatching {
+                        withContext(Dispatchers.IO) {
+                            val id = prefs.getString("ukho_station", null) ?: Ukho.findPooleStation(key).let { (id, name) ->
+                                prefs.edit().putString("ukho_station", id).putString("ukho_station_name", name).apply(); id
+                            }
+                            mergeUkhoCache(Ukho.events(key, id))
+                        }
+                    }.onSuccess { cEvents = it }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it
+                            msgs["uk"] = "UKHO: ${redact(it.message, *keys)}" +
+                                if (cEvents != null) " (showing saved times)" else "" }
+                    publish(loading = true)
+                },
+                launch {
+                    val key = worldTidesKey
+                    if (key.isBlank() || src != "worldtides") return@launch
+                    runCatching { withContext(Dispatchers.IO) { worldTides(key, from) } }
+                        .onSuccess { cWt = it }
+                        .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it
+                            msgs["wt"] = "WorldTides: ${redact(it.message, *keys)}" +
+                                if (cWt != null) " (showing saved curve)" else "" }
+                    publish(loading = true)
+                },
+            )
+            jobs.forEach { it.join() }
+            publish(loading = false)
+        }
+    }
+
+    // last in the class, so every property above is set before the first refresh
+    init { refresh() }
 }
 
 /** A pasted key may carry line breaks or be pasted twice: keep only the first token. */

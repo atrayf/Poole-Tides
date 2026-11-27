@@ -15,9 +15,10 @@ import java.time.ZoneOffset
  */
 const val CD_BELOW_ODN = 1.32
 
-private fun get(url: String, headers: Map<String, String> = emptyMap(), readTimeoutMs: Int = 20000): String {
+private fun get(url: String, headers: Map<String, String> = emptyMap(), readTimeoutMs: Int = 15000): String {
     val c = URL(url).openConnection() as HttpURLConnection
-    c.connectTimeout = 15000; c.readTimeout = readTimeoutMs
+    // short connect timeout: with no working connection this fails in seconds, not minutes
+    c.connectTimeout = 8000; c.readTimeout = readTimeoutMs
     headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
     try {
         if (c.responseCode !in 200..299) error("HTTP ${c.responseCode} from ${URL(url).host}")
@@ -32,9 +33,13 @@ object PooleGauge {
 
     fun fetch(sinceEpoch: Long): List<TidePoint> {
         val since = Instant.ofEpochSecond(sinceEpoch).toString()
-        // the EA API is sometimes slow: allow 45 s and try twice
+        // the EA API is sometimes slow to answer: allow 30 s, and try again only if it
+        // connected but was slow (not when there is no connection at all)
         val url = "$MEASURE?since=$since&_sorted&_limit=5000"
-        val body = runCatching { get(url, readTimeoutMs = 45000) }.getOrElse { get(url, readTimeoutMs = 45000) }
+        val body = try { get(url, readTimeoutMs = 30000) } catch (e: java.net.SocketTimeoutException) {
+            if (e.message?.contains("connect", ignoreCase = true) == true) throw e
+            get(url, readTimeoutMs = 30000)
+        }
         val items = JSONObject(body).getJSONArray("items")
         return (0 until items.length()).mapNotNull {
             val o = items.getJSONObject(it)
