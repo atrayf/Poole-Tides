@@ -166,6 +166,8 @@ class TidesViewModel(app: Application) : AndroidViewModel(app) {
         (0 until a.length()).map { val o = a.getJSONObject(it); TidePoint(o.getLong("t"), o.getDouble("h")) }
     }.getOrDefault(emptyList())
 
+    fun goToday() { state = state.copy(dayOffset = 0) }
+
     fun shiftDay(d: Int) { state = state.copy(dayOffset = (state.dayOffset + d).coerceIn(-DAYS_BACK, DAYS_AHEAD)) }
 
     fun refresh() = viewModelScope.launch {
@@ -291,8 +293,16 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
                 ) { _, dx -> drag += dx }
             })
             SelectedReadout(s, selT)
-            Slider(value = selMin, onValueChange = { selMin = it }, valueRange = 0f..1430f, steps = 142,
-                modifier = Modifier.fillMaxWidth().height(32.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Slider(value = selMin, onValueChange = { selMin = it }, valueRange = 0f..1430f, steps = 142,
+                    modifier = Modifier.weight(1f).height(32.dp))
+                Spacer(Modifier.width(8.dp))
+                // back to today, with the time line at the current time (nearest 10 minutes)
+                OutlinedButton(onClick = {
+                    vm.goToday()
+                    selMin = java.time.LocalTime.now(LONDON).let { ((it.hour * 60 + it.minute + 5) / 10 * 10).coerceAtMost(1430) }.toFloat()
+                }, contentPadding = PaddingValues(horizontal = 12.dp)) { Text("Now") }
+            }
             s.messages.forEach { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
             Spacer(Modifier.height(8.dp))
         }
@@ -300,7 +310,7 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
     if (showAbout) AboutDialog { vm.aboutSeen = true; showAbout = false }
     if (showWeather) AlertDialog(onDismissRequest = { showWeather = false },
         title = { Text("Bournemouth weather") },
-        text = { WeatherHistory(s.weather) },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) { WeatherHistory(s.weather) } },
         confirmButton = { TextButton(onClick = { showWeather = false }) { Text("Close") } })
     if (showKey) AlertDialog(onDismissRequest = { showKey = false },
         title = { Text("Key") },
@@ -320,7 +330,7 @@ fun TidesScreen(vm: TidesViewModel = viewModel()) {
         confirmButton = { TextButton(onClick = { showKey = false }) { Text("Close") } })
     if (showTable) AlertDialog(onDismissRequest = { showTable = false },
         title = { Text("High and low waters – " + dayStart.format(DateTimeFormatter.ofPattern("EEE d MMM"))) },
-        text = { Column { HighLowTable(s, from, to) } },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) { HighLowTable(s, from, to) } },
         confirmButton = { TextButton(onClick = { showTable = false }) { Text("Close") } })
     if (showSettings) SettingsDialog(vm.ukhoKey, vm.worldTidesKey, vm.thirdSource, onDismiss = { showSettings = false }) { uk, wt, src ->
         if (uk != vm.ukhoKey) vm.ukhoKey = uk
@@ -363,15 +373,15 @@ fun WeatherHistory(wx: Map<Long, Weather>) {
     val nowC = MaterialTheme.colorScheme.primary
     val pColor = Color(0xFFCE93D8); val wColor = Color(0xFF4DD0E1)
     Column {
-        Row {
+        Column {
             Text("Pressure (hPa)", color = pColor, fontSize = 13.sp)
-            Spacer(Modifier.width(16.dp))
-            Text("Wind (kn), ticks show direction", color = wColor, fontSize = 13.sp)
+            Text("Wind (kn), and the direction it blows from", color = wColor, fontSize = 13.sp)
         }
-        Canvas(Modifier.fillMaxWidth().height(340.dp)) {
+        Canvas(Modifier.fillMaxWidth().height(428.dp)) {
             val left = 36.dp.toPx(); val w = size.width - left
-            val gap = 18.dp.toPx(); val axis = 16.dp.toPx()
-            val ph = (size.height - gap - axis) / 2
+            val gap = 18.dp.toPx(); val axis = 34.dp.toPx()
+            val dh = 70.dp.toPx()  // wind direction strip
+            val ph = (size.height - 2 * gap - axis - dh) / 2
             fun x(t: Long) = left + w * (t - from).toFloat() / (to - from)
             val paint = android.graphics.Paint().apply { color = text.toArgb(); textSize = 10.sp.toPx(); isAntiAlias = true }
             fun panel(top: Float, values: List<Pair<Long, Double>>, step: Double, c: Color, fmt: String): (Double) -> Float {
@@ -392,24 +402,44 @@ fun WeatherHistory(wx: Map<Long, Weather>) {
                 return ::y
             }
             panel(0f, pts.map { it.t to it.mslpHpa }, 10.0, pColor, "%.0f")
-            val wy = panel(ph + gap, pts.map { it.t to it.windMs * 1.943844 }, 10.0, wColor, "%.0f")
-            // a short tick every 12 h pointing the way the wind blows towards
-            pts.filter { it.t % (12 * 3600) == 0L }.forEach { r ->
-                val cx = x(r.t); val cy = wy(r.windMs * 1.943844)
-                val a = Math.toRadians(r.windFromDeg + 180)
-                val len = 9.dp.toPx()
-                drawLine(wColor, Offset(cx, cy), Offset(cx + (len * kotlin.math.sin(a)).toFloat(), cy - (len * kotlin.math.cos(a)).toFloat()), 2f)
+            panel(ph + gap, pts.map { it.t to it.windMs * 1.943844 }, 10.0, wColor, "%.0f")
+            // wind direction (where it blows from) as hourly dots on a N-E-S-W-N scale
+            val dTop = 2 * ph + 2 * gap
+            fun dy(deg: Double) = (dTop + dh * (((deg % 360) + 360) % 360) / 360).toFloat()
+            listOf("N", "E", "S", "W", "N").forEachIndexed { i, lab ->
+                val y = dTop + dh * i / 4
+                drawLine(grid, Offset(left, y), Offset(size.width, y), 1f)
+                drawContext.canvas.nativeCanvas.drawText(lab, 0f, y + 4, paint)
             }
-            // day ticks every two days, labelled with the day of the month
-            val dayFmt = DateTimeFormatter.ofPattern("d MMM").withZone(LONDON)
-            var d = Instant.ofEpochSecond(from).atZone(LONDON).toLocalDate().plusDays(1)
+            pts.forEach { r -> drawCircle(wColor, 1.8.dp.toPx(), Offset(x(r.t), dy(r.windFromDeg))) }
+            // day lines; day numbers centred in each day, then a band naming each month
+            val plotBottom = size.height - axis
+            val dayRow = plotBottom + 12.dp.toPx()
+            val monthTop = plotBottom + 16.dp.toPx()
+            val centred = android.graphics.Paint(paint).apply { textAlign = android.graphics.Paint.Align.CENTER }
+            var d = Instant.ofEpochSecond(from).atZone(LONDON).toLocalDate()
             while (true) {
-                val t = d.atStartOfDay(LONDON).toEpochSecond()
-                if (t > to) break
-                drawLine(grid, Offset(x(t), 0f), Offset(x(t), size.height - axis), 1f)
-                if (d.dayOfMonth % 2 == 0)
-                    drawContext.canvas.nativeCanvas.drawText(dayFmt.format(Instant.ofEpochSecond(t)), x(t) + 2, size.height - 2, paint)
+                val t0 = d.atStartOfDay(LONDON).toEpochSecond()
+                if (t0 > to) break
+                val t1 = d.plusDays(1).atStartOfDay(LONDON).toEpochSecond()
+                if (t0 >= from) drawLine(grid, Offset(x(t0), 0f), Offset(x(t0), plotBottom), 1f)
+                val mid = x((maxOf(t0, from) + minOf(t1, to)) / 2)
+                if (t1 - maxOf(t0, from) > 43200 && minOf(t1, to) - t0 > 43200)
+                    drawContext.canvas.nativeCanvas.drawText(d.dayOfMonth.toString(), mid, dayRow, centred)
                 d = d.plusDays(1)
+            }
+            var m = Instant.ofEpochSecond(from).atZone(LONDON).toLocalDate().withDayOfMonth(1)
+            val monthFmt = DateTimeFormatter.ofPattern("MMMM yyyy")
+            while (true) {
+                val m0 = m.atStartOfDay(LONDON).toEpochSecond()
+                if (m0 > to) break
+                val xa = x(maxOf(m0, from)); val xb = x(minOf(m.plusMonths(1).atStartOfDay(LONDON).toEpochSecond(), to))
+                drawRect(grid.copy(alpha = 0.35f), Offset(xa, monthTop), androidx.compose.ui.geometry.Size(xb - xa, size.height - monthTop))
+                if (m0 >= from) drawLine(text, Offset(xa, plotBottom), Offset(xa, size.height), 1.5f)
+                val label = m.format(monthFmt)
+                if (xb - xa > centred.measureText(label) + 8)
+                    drawContext.canvas.nativeCanvas.drawText(label, (xa + xb) / 2, size.height - 4.dp.toPx(), centred)
+                m = m.plusMonths(1)
             }
             drawLine(nowC, Offset(x(now), 0f), Offset(x(now), size.height - axis), 2f,
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
@@ -619,24 +649,29 @@ private inline fun androidx.compose.ui.graphics.drawscope.DrawScope.clipRectSafe
 @Composable
 fun HighLowTable(s: UiState, from: Long, to: Long) {
     val fmt = DateTimeFormatter.ofPattern("HH:mm").withZone(LONDON)
+    // gauge readings are noisy: same 75-minute running mean as the chart labels
+    val actual = remember(s.observed, from) { Curves.turningPoints(Curves.smooth(s.observed, 2), from, to) }
     val model = Curves.turningPoints(s.model, from, to)
+    val third = thirdTurningPoints(s, from, to)
     Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-        Column(Modifier.weight(1f)) {
-            Text("Poole Tides model", color = MODEL_COLOR, fontSize = 13.sp)
-            model.forEach { (p, high) ->
-                Text("${if (high) "HW" else "LW"} ${fmt.format(Instant.ofEpochSecond(p.t))}  %.2f m".format(p.h), fontSize = 13.sp)
-            }
-        }
-        Column(Modifier.weight(1f)) {
-            Text(s.thirdLabel, color = UKHO_COLOR, fontSize = 13.sp)
-            val third = thirdTurningPoints(s, from, to)
-            if (third.isEmpty()) Text("–", fontSize = 13.sp)
-            third.forEach { (p, high) ->
-                Text("${if (high) "HW" else "LW"} ${fmt.format(Instant.ofEpochSecond(p.t))}  %.2f m".format(p.h), fontSize = 13.sp)
-            }
-        }
+        HighLowColumn("Actual (gauge)", OBS_COLOR, actual, fmt, Modifier.weight(1f))
+        HighLowColumn("Poole Tides model", MODEL_COLOR, model, fmt, Modifier.weight(1f))
+        HighLowColumn(s.thirdLabel, UKHO_COLOR, third, fmt, Modifier.weight(1f))
     }
     Spacer(Modifier.height(8.dp))
+}
+
+@Composable
+private fun HighLowColumn(title: String, color: Color, tps: List<Pair<TidePoint, Boolean>>,
+                          fmt: DateTimeFormatter, modifier: Modifier) {
+    Column(modifier) {
+        Text(title, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        if (tps.isEmpty()) Text("–", fontSize = 12.sp)
+        tps.forEach { (p, high) ->
+            Text("${if (high) "HW" else "LW"} ${fmt.format(Instant.ofEpochSecond(p.t))}", fontSize = 12.sp)
+            Text("%.2f m".format(p.h), fontSize = 12.sp, modifier = Modifier.padding(start = 22.dp, bottom = 2.dp))
+        }
+    }
 }
 
 const val CONTACT_EMAIL = "pooletideapp@trayfoot.co.uk"
@@ -685,6 +720,43 @@ fun AboutDialog(onClose: () -> Unit) {
         confirmButton = { TextButton(onClick = onClose) { Text("OK") } })
 }
 
+/** Step-by-step instructions for getting the UKHO and WorldTides keys, with links. */
+@Composable
+fun KeyHelpDialog(onClose: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val linkColor = MaterialTheme.colorScheme.primary
+    @Composable fun Link(text: String, url: String) = Text(text, fontSize = 14.sp, color = linkColor,
+        modifier = Modifier.clickable {
+            runCatching { ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))) }
+        }.padding(vertical = 4.dp))
+    @Composable fun Step(n: Int, text: String) = Text("$n. $text", fontSize = 13.sp, modifier = Modifier.padding(vertical = 2.dp))
+    AlertDialog(onDismissRequest = onClose,
+        title = { Text("Getting the API keys") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("UKHO (free)", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Link("developer.admiralty.co.uk", "https://developer.admiralty.co.uk")
+                Step(1, "Sign up for a free account on the ADMIRALTY Developer Portal and sign in.")
+                Step(2, "Open Products, choose UK Tidal API – Discovery and subscribe. The Discovery tier is free.")
+                Step(3, "Go to your Profile. Under Subscriptions, press Show next to the Primary key.")
+                Step(4, "Copy the key and paste it into UKHO subscription key in Settings, then press Save.")
+                Link("Open my Profile page", "https://developer.admiralty.co.uk/profile")
+                Spacer(Modifier.height(16.dp))
+                Text("WorldTides (paid)", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Link("worldtides.info", "https://www.worldtides.info")
+                Step(1, "Register for an account at worldtides.info and sign in.")
+                Step(2, "Buy credits if you need them. Each refresh uses credits; the app caches results for 12 hours.")
+                Step(3, "Open the API key page from your account and copy the key.")
+                Step(4, "Paste it into WorldTides key in Settings, choose WorldTides as the third curve, then press Save.")
+                Link("Open the API key page", "https://www.worldtides.info/apikey")
+                Spacer(Modifier.height(12.dp))
+                Text("Keys are stored only on this phone. Don't share them; if one leaks, regenerate it on the provider's site.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Close") } })
+}
+
 @Composable
 fun SettingsDialog(ukho: String, worldTides: String, source: String, onDismiss: () -> Unit,
                    onSave: (String, String, String) -> Unit) {
@@ -692,6 +764,8 @@ fun SettingsDialog(ukho: String, worldTides: String, source: String, onDismiss: 
     var wt by remember { mutableStateOf(worldTides) }
     var src by remember { mutableStateOf(source) }
     val hidden = androidx.compose.ui.text.input.PasswordVisualTransformation()
+    var showHelp by remember { mutableStateOf(false) }
+    if (showHelp) KeyHelpDialog { showHelp = false }
     AlertDialog(onDismissRequest = onDismiss,
         title = { Text("Settings") },
         text = {
@@ -703,6 +777,8 @@ fun SettingsDialog(ukho: String, worldTides: String, source: String, onDismiss: 
                         Text(label, fontSize = 14.sp)
                     }
                 }
+                Spacer(Modifier.height(4.dp))
+                OutlinedButton(onClick = { showHelp = true }) { Text("How to get the API keys") }
                 Spacer(Modifier.height(8.dp))
                 Text("UKHO: free key from the ADMIRALTY Developer Portal (UK Tidal API, Discovery tier).", fontSize = 13.sp)
                 OutlinedTextField(uk, { uk = it }, singleLine = true, label = { Text("UKHO subscription key") },
